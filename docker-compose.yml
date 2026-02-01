@@ -1,0 +1,194 @@
+# Turtle-CANSLIM Docker Compose
+# Full stack: App + PostgreSQL + Redis
+
+version: "3.9"
+
+services:
+  # ============================================
+  # PostgreSQL Database
+  # ============================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: turtle-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-turtle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-turtle_secret_2024}
+      POSTGRES_DB: ${POSTGRES_DB:-turtle_canslim}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-turtle} -d ${POSTGRES_DB:-turtle_canslim}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - turtle-net
+
+  # ============================================
+  # Redis Cache
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: turtle-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - turtle-net
+
+  # ============================================
+  # Main Trading Application
+  # ============================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: turtle-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Trading Mode
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      
+      # Database (internal Docker network)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-turtle_secret_2024}@postgres:5432/${POSTGRES_DB:-turtle_canslim}
+      
+      # Redis (internal Docker network)
+      REDIS_URL: redis://redis:6379/0
+      
+      # KIS API (Paper Trading)
+      KIS_PAPER_APP_KEY: ${KIS_PAPER_APP_KEY}
+      KIS_PAPER_APP_SECRET: ${KIS_PAPER_APP_SECRET}
+      KIS_PAPER_ACCOUNT: ${KIS_PAPER_ACCOUNT}
+      
+      # KIS API (Live Trading)
+      KIS_LIVE_APP_KEY: ${KIS_LIVE_APP_KEY:-}
+      KIS_LIVE_APP_SECRET: ${KIS_LIVE_APP_SECRET:-}
+      KIS_LIVE_ACCOUNT: ${KIS_LIVE_ACCOUNT:-}
+      
+      # DART API
+      DART_API_KEY: ${DART_API_KEY}
+      
+      # SEC EDGAR
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-TurtleCANSLIM contact@example.com}
+      
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    networks:
+      - turtle-net
+    # Run trading bot by default
+    command: ["python", "scripts/run_trading.py", "--mode", "${TRADING_MODE:-paper}"]
+
+  # ============================================
+  # Screener Service (one-shot or scheduled)
+  # ============================================
+  screener:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: turtle-screener
+    profiles: ["screener"]  # Only run when explicitly requested
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-turtle_secret_2024}@postgres:5432/${POSTGRES_DB:-turtle_canslim}
+      REDIS_URL: redis://redis:6379/0
+      KIS_PAPER_APP_KEY: ${KIS_PAPER_APP_KEY}
+      KIS_PAPER_APP_SECRET: ${KIS_PAPER_APP_SECRET}
+      KIS_PAPER_ACCOUNT: ${KIS_PAPER_ACCOUNT}
+      DART_API_KEY: ${DART_API_KEY}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-TurtleCANSLIM contact@example.com}
+    volumes:
+      - ./logs:/app/logs
+      - ./results:/app/results
+    networks:
+      - turtle-net
+    command: ["python", "scripts/run_screener.py"]
+
+  # ============================================
+  # TUI Service (interactive terminal)
+  # ============================================
+  tui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: turtle-tui
+    profiles: ["tui"]  # Only run when explicitly requested
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-turtle_secret_2024}@postgres:5432/${POSTGRES_DB:-turtle_canslim}
+      REDIS_URL: redis://redis:6379/0
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      KIS_PAPER_APP_KEY: ${KIS_PAPER_APP_KEY}
+      KIS_PAPER_APP_SECRET: ${KIS_PAPER_APP_SECRET}
+      KIS_PAPER_ACCOUNT: ${KIS_PAPER_ACCOUNT}
+      DART_API_KEY: ${DART_API_KEY}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-TurtleCANSLIM contact@example.com}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    networks:
+      - turtle-net
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/run_tui.py"]
+
+  # ============================================
+  # Database Migration (one-shot)
+  # ============================================
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: turtle-migrate
+    profiles: ["migrate"]  # Only run when explicitly requested
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-turtle_secret_2024}@postgres:5432/${POSTGRES_DB:-turtle_canslim}
+    networks:
+      - turtle-net
+    command: ["alembic", "upgrade", "head"]
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  turtle-net:
+    driver: bridge

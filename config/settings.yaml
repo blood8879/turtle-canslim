@@ -1,0 +1,45 @@
+trading:
+  mode: paper
+  market: krx
+
+canslim:
+  c_eps_growth_min: 0.20
+  c_revenue_growth_min: 0.25
+  a_eps_growth_min: 0.20
+  a_min_years: 3
+  l_rs_min: 80
+  i_institution_min: 0.10
+
+turtle:
+  system1_entry_period: 20
+  system1_exit_period: 10
+  system2_entry_period: 55
+  system2_exit_period: 20
+  atr_period: 20
+  pyramid_unit_interval: 0.5
+
+risk:
+  risk_per_unit: 0.02
+  max_units_per_stock: 4
+  max_units_correlated: 10
+  max_units_loosely_correlated: 16
+  max_units_total: 20
+  stop_loss_atr_multiplier: 2.0
+  stop_loss_max_percent: 0.08
+
+schedule:
+  krx:
+    screening_time: "08:00"
+    market_open: "09:00"
+    market_close: "15:30"
+  us:
+    screening_time: "21:00"
+    market_open: "23:30"
+    market_close: "06:00"
+
+notification:
+  telegram_enabled: false
+  notify_on_signal: true
+  notify_on_order: true
+  notify_on_fill: true
+  daily_report: true
