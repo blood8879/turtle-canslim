@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+
+# Add project root to Python path for Docker compatibility
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from src.core.config import get_settings
 from src.data.models import Base

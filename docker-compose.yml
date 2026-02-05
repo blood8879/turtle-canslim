@@ -167,12 +167,13 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: turtle-migrate
-    profiles: ["migrate"]  # Only run when explicitly requested
+    profiles: ["migrate"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-turtle_secret_2024}@postgres:5432/${POSTGRES_DB:-turtle_canslim}
+      PYTHONPATH: /app
     networks:
       - turtle-net
     command: ["alembic", "upgrade", "head"]
