@@ -17,6 +17,8 @@ turtle:
   system2_exit_period: 20
   atr_period: 20
   pyramid_unit_interval: 0.5
+  breakout_proximity_pct: 0.03
+  fast_poll_interval_seconds: 3
 
 risk:
   risk_per_unit: 0.02

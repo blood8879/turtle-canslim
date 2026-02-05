@@ -872,6 +872,8 @@ class TurtleCANSLIMApp(App):
             from src.risk.position_sizing import PositionSizer
             from src.risk.unit_limits import UnitLimitManager
             from src.signals.turtle import TurtleSignalEngine
+            from src.signals.breakout import BreakoutProximityWatcher, WatchedStock
+            from src.signals.atr import ATRCalculator
 
             if self._settings.has_kis_credentials:
                 broker = LiveBroker(self._settings)
@@ -883,6 +885,13 @@ class TurtleCANSLIMApp(App):
                 broker_label = "인메모리 시뮬레이션"
             self.log_message(f"[cyan]브로커: {broker_label}[/]")
             await broker.connect()
+
+            proximity_watcher = BreakoutProximityWatcher(self._settings.turtle)
+            fast_poll_seconds = self._settings.turtle.fast_poll_interval_seconds
+            self.log_message(
+                f"[cyan]돌파 근접 감시: {self._settings.turtle.breakout_proximity_pct:.1%} 이내 → "
+                f"{fast_poll_seconds}초 간격 폴링[/]"
+            )
 
             while trading_active():
                 # Check if market is open
@@ -1012,6 +1021,52 @@ class TurtleCANSLIMApp(App):
                             else:
                                 self.log_message(f"    [yellow]⊘ 스킵[/] {result.message}")
 
+                        proximity_watcher.clear()
+                        atr_calc = ATRCalculator(self._settings.turtle)
+                        for cid in candidate_ids:
+                            existing_pos = await position_repo.get_by_stock(cid, open_only=True)
+                            if existing_pos:
+                                continue
+                            prices = await price_repo.get_period(cid, 60)
+                            if len(prices) < 56:
+                                continue
+                            highs = [p.high for p in prices]
+                            lows = [p.low for p in prices]
+                            closes = [p.close for p in prices]
+                            current_close = closes[-1]
+                            atr_result = atr_calc.calculate(highs, lows, closes)
+                            if not atr_result:
+                                continue
+                            detector = signal_engine._breakout
+                            targets = detector.check_proximity(
+                                current_close,
+                                highs,
+                                Decimal(str(self._settings.turtle.breakout_proximity_pct)),
+                            )
+                            if targets:
+                                stock_info = await signal_engine._get_stock_info(cid)
+                                symbol = stock_info["symbol"] if stock_info else str(cid)
+                                name = stock_info["name"] if stock_info else ""
+                                proximity_watcher.register(
+                                    WatchedStock(
+                                        stock_id=cid,
+                                        symbol=symbol,
+                                        name=name,
+                                        targets=targets,
+                                        highs=highs,
+                                        lows=lows,
+                                        closes=closes,
+                                        atr_n=atr_result.atr,
+                                    )
+                                )
+
+                        if proximity_watcher.has_targets:
+                            symbols_str = ", ".join(proximity_watcher.watched_symbols)
+                            self.log_message(
+                                f"[magenta]⚡ 돌파 근접 감시 대상: {proximity_watcher.watched_count}개 "
+                                f"({symbols_str}) → {fast_poll_seconds}초 간격 폴링[/]"
+                            )
+
                     await self._load_signals()
                     await self._load_portfolio()
                     self._update_status()
@@ -1023,11 +1078,101 @@ class TurtleCANSLIMApp(App):
                 except Exception as e:
                     self.log_message(f"[red]{market_label} 트레이딩 사이클 오류: {e}[/]")
 
-                # Sleep in small increments so we can respond to stop quickly
-                for _ in range(interval_minutes * 60):
-                    if not trading_active():
-                        break
-                    await asyncio.sleep(1)
+                elapsed = 0
+                total_wait = interval_minutes * 60
+                while elapsed < total_wait and trading_active():
+                    if proximity_watcher.has_targets:
+                        try:
+                            db = get_db_manager()
+                            async with db.session() as poll_session:
+                                poll_order_repo = OrderRepository(poll_session)
+                                poll_position_repo = PositionRepository(poll_session)
+                                poll_signal_repo = SignalRepository(poll_session)
+                                poll_stock_repo = StockRepository(poll_session)
+
+                                poll_position_sizer = PositionSizer(self._settings.risk)
+                                poll_unit_manager = UnitLimitManager(
+                                    self._settings.risk, poll_position_repo
+                                )
+                                poll_order_manager = OrderManager(
+                                    broker=broker,
+                                    position_sizer=poll_position_sizer,
+                                    unit_manager=poll_unit_manager,
+                                    order_repo=poll_order_repo,
+                                    position_repo=poll_position_repo,
+                                )
+
+                                for watched in proximity_watcher.get_watched_list():
+                                    try:
+                                        price = await broker.get_current_price(watched.symbol)
+                                        if price <= 0:
+                                            continue
+
+                                        breakout = proximity_watcher.check_breakout(
+                                            watched.stock_id, price
+                                        )
+                                        if breakout and breakout.is_entry:
+                                            from src.signals.turtle import TurtleSignal
+
+                                            signal = TurtleSignal(
+                                                symbol=watched.symbol,
+                                                stock_id=watched.stock_id,
+                                                signal_type=breakout.breakout_type.value,
+                                                system=breakout.system,
+                                                price=price,
+                                                atr_n=watched.atr_n,
+                                                stop_loss=price - (watched.atr_n * Decimal("2")),
+                                                position_size=None,
+                                                timestamp=datetime.now(),
+                                                breakout_level=breakout.breakout_level,
+                                                name=watched.name,
+                                            )
+
+                                            await poll_signal_repo.create(
+                                                stock_id=signal.stock_id,
+                                                timestamp=signal.timestamp,
+                                                signal_type=signal.signal_type,
+                                                price=signal.price,
+                                                system=signal.system,
+                                                atr_n=signal.atr_n,
+                                            )
+
+                                            system_label = (
+                                                "20일돌파" if signal.system == 1 else "55일돌파"
+                                            )
+                                            self.log_message(
+                                                f"  [green bold]⚡ 돌파 감지![/] {signal.symbol}"
+                                                f" {watched.name} | "
+                                                f"현재가 [bold]{price:,.0f}[/] | "
+                                                f"돌파가 {breakout.breakout_level:,.0f} | "
+                                                f"{system_label}"
+                                            )
+
+                                            result = await poll_order_manager.execute_entry(signal)
+                                            if result.success and result.filled_price:
+                                                total_cost = result.quantity * result.filled_price
+                                                self.log_message(
+                                                    f"    [green]✓ 체결[/] {result.quantity}주 × "
+                                                    f"{result.filled_price:,.0f}원 "
+                                                    f"(총 {total_cost:,.0f}원)"
+                                                )
+                                            else:
+                                                self.log_message(
+                                                    f"    [yellow]⊘ 스킵[/] {result.message}"
+                                                )
+                                    except Exception as e:
+                                        self.log_message(
+                                            f"    [red]폴링 오류[/] {watched.symbol}: {e}"
+                                        )
+
+                        except Exception as e:
+                            self.log_message(f"[red]Fast poll 오류: {e}[/]")
+
+                        await asyncio.sleep(fast_poll_seconds)
+                        elapsed += fast_poll_seconds
+                    else:
+                        await asyncio.sleep(1)
+                        elapsed += 1
 
             await broker.disconnect()
 

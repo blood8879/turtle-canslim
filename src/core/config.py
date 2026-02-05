@@ -38,6 +38,8 @@ class TurtleConfig(BaseModel):
     atr_period: int = Field(default=20, ge=5, le=50)
     pyramid_unit_interval: float = Field(default=0.5, ge=0.25, le=1.0)
     signal_check_interval_minutes: int = Field(default=1, ge=1, le=30)
+    breakout_proximity_pct: float = Field(default=0.03, ge=0.005, le=0.10)
+    fast_poll_interval_seconds: int = Field(default=3, ge=1, le=30)
 
 
 class RiskConfig(BaseModel):

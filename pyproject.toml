@@ -12,7 +12,7 @@ keywords = ["trading", "stocks", "canslim", "turtle-trading", "automation"]
 
 dependencies = [
     # 한투 API
-    "python-kis>=2.1.0",
+    "mojito2>=0.1.0",
     
     # 데이터 처리
     "pandas>=2.0.0",
@@ -121,7 +121,7 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = [
-    "python_kis.*",
+    "mojito.*",
     "backtesting.*",
     "vectorbt.*",
     "apscheduler.*",

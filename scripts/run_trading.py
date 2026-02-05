@@ -24,7 +24,9 @@ from src.data.repositories import (
 )
 from src.data.auto_fetcher import AutoDataFetcher
 from src.screener.canslim import CANSLIMScreener
-from src.signals.turtle import TurtleSignalEngine
+from src.signals.turtle import TurtleSignalEngine, TurtleSignal
+from src.signals.breakout import BreakoutProximityWatcher, WatchedStock
+from src.signals.atr import ATRCalculator
 from src.risk.position_sizing import PositionSizer
 from src.risk.unit_limits import UnitLimitManager
 from src.execution.paper_broker import PaperBroker
@@ -53,6 +55,8 @@ class TradingBot:
             self._broker = LiveBroker()
         else:
             self._broker = PaperBroker(initial_cash=Decimal("100000000"))
+
+        self._proximity_watcher = BreakoutProximityWatcher(self._settings.turtle)
 
     async def initialize(self) -> None:
         logger.info(
@@ -346,6 +350,51 @@ class TradingBot:
                             )
                         )
 
+            self._proximity_watcher.clear()
+            atr_calc = ATRCalculator(self._settings.turtle)
+            for cid in candidate_ids:
+                existing_pos = await position_repo.get_by_stock(cid, open_only=True)
+                if existing_pos:
+                    continue
+                prices = await price_repo.get_period(cid, 60)
+                if len(prices) < 56:
+                    continue
+                highs = [p.high for p in prices]
+                lows = [p.low for p in prices]
+                closes = [p.close for p in prices]
+                current_close = realtime_prices.get(cid, closes[-1])
+                atr_result = atr_calc.calculate(highs, lows, closes)
+                if not atr_result:
+                    continue
+                targets = signal_engine._breakout.check_proximity(
+                    current_close,
+                    highs,
+                    Decimal(str(self._settings.turtle.breakout_proximity_pct)),
+                )
+                if targets:
+                    stock_info = await signal_engine._get_stock_info(cid)
+                    symbol = stock_info["symbol"] if stock_info else str(cid)
+                    name = stock_info["name"] if stock_info else ""
+                    self._proximity_watcher.register(
+                        WatchedStock(
+                            stock_id=cid,
+                            symbol=symbol,
+                            name=name,
+                            targets=targets,
+                            highs=highs,
+                            lows=lows,
+                            closes=closes,
+                            atr_n=atr_result.atr,
+                        )
+                    )
+
+            if self._proximity_watcher.has_targets:
+                tlog.info(
+                    "proximity_watch_started",
+                    count=self._proximity_watcher.watched_count,
+                    symbols=self._proximity_watcher.watched_symbols,
+                )
+
             cycle_elapsed = (datetime.now() - cycle_start).total_seconds()
             tlog.info(
                 "signal_cycle_complete",
@@ -355,6 +404,7 @@ class TradingBot:
                 prices_fetched=len(realtime_prices),
                 candidates=len(candidate_ids),
                 open_positions=len(position_stock_ids),
+                proximity_watched=self._proximity_watcher.watched_count,
                 elapsed_seconds=round(cycle_elapsed, 2),
             )
             logger.info(
@@ -363,7 +413,11 @@ class TradingBot:
                 pyramids=len(pyramid_signals),
                 entries=len(entry_signals),
                 prices_fetched=len(realtime_prices),
+                proximity_watched=self._proximity_watcher.watched_count,
             )
+
+        if self._proximity_watcher.has_targets:
+            await self.run_proximity_fast_poll()
 
     async def run_signal_check(self) -> None:
         logger.info("checking_signals_fallback_daily")
@@ -479,6 +533,125 @@ class TradingBot:
                 pyramids=len(pyramid_signals),
                 entries=len(entry_signals),
             )
+
+    async def run_proximity_fast_poll(self) -> None:
+        if not self._proximity_watcher.has_targets:
+            return
+
+        poll_interval = self._settings.turtle.fast_poll_interval_seconds
+        cycle_interval = self._settings.turtle.signal_check_interval_minutes * 60
+        elapsed = 0
+
+        tlog.info(
+            "fast_poll_start",
+            watched=self._proximity_watcher.watched_count,
+            symbols=self._proximity_watcher.watched_symbols,
+            poll_interval=poll_interval,
+        )
+
+        while elapsed < cycle_interval and self._proximity_watcher.has_targets:
+            if shutdown_event.is_set():
+                break
+
+            async with self._db.session() as session:
+                order_repo = OrderRepository(session)
+                position_repo = PositionRepository(session)
+                signal_repo = SignalRepository(session)
+                position_sizer = PositionSizer(self._settings.risk)
+                unit_manager = UnitLimitManager(self._settings.risk, position_repo)
+                order_manager = OrderManager(
+                    broker=self._broker,
+                    position_sizer=position_sizer,
+                    unit_manager=unit_manager,
+                    order_repo=order_repo,
+                    position_repo=position_repo,
+                )
+
+                for watched in self._proximity_watcher.get_watched_list():
+                    try:
+                        price = await self._broker.get_current_price(watched.symbol)
+                        if price <= 0:
+                            continue
+
+                        breakout = self._proximity_watcher.check_breakout(watched.stock_id, price)
+                        if breakout and breakout.is_entry:
+                            signal = TurtleSignal(
+                                symbol=watched.symbol,
+                                stock_id=watched.stock_id,
+                                signal_type=breakout.breakout_type.value,
+                                system=breakout.system,
+                                price=price,
+                                atr_n=watched.atr_n,
+                                stop_loss=price - (watched.atr_n * Decimal("2")),
+                                position_size=None,
+                                timestamp=datetime.now(),
+                                breakout_level=breakout.breakout_level,
+                                name=watched.name,
+                            )
+
+                            await signal_repo.create(
+                                stock_id=signal.stock_id,
+                                timestamp=signal.timestamp,
+                                signal_type=signal.signal_type,
+                                price=signal.price,
+                                system=signal.system,
+                                atr_n=signal.atr_n,
+                            )
+
+                            tlog.info(
+                                "fast_poll_breakout_detected",
+                                symbol=watched.symbol,
+                                name=watched.name,
+                                price=float(price),
+                                breakout_level=float(breakout.breakout_level)
+                                if breakout.breakout_level
+                                else None,
+                                system=breakout.system,
+                            )
+
+                            result = await order_manager.execute_entry(signal)
+                            tlog.info(
+                                "fast_poll_entry_result",
+                                symbol=watched.symbol,
+                                success=result.success,
+                                quantity=result.quantity,
+                                filled_price=float(result.filled_price)
+                                if result.filled_price
+                                else None,
+                                message=result.message,
+                            )
+
+                            if self._notifier.is_enabled:
+                                await self._notifier.notify_signal(
+                                    SignalNotification(
+                                        symbol=signal.symbol,
+                                        signal_type=f"⚡{signal.signal_type}",
+                                        price=signal.price,
+                                        atr_n=signal.atr_n,
+                                        stop_loss=signal.stop_loss,
+                                        system=signal.system,
+                                    )
+                                )
+                                if result.success:
+                                    await self._notifier.notify_order(
+                                        OrderNotification(
+                                            symbol=signal.symbol,
+                                            side="BUY",
+                                            quantity=result.quantity,
+                                            price=result.filled_price or signal.price,
+                                            order_id=result.order_id,
+                                            success=result.success,
+                                            message=f"FastPoll {result.message}",
+                                        )
+                                    )
+
+                    except Exception as e:
+                        logger.warning("fast_poll_error", symbol=watched.symbol, error=str(e))
+
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+        tlog.info("fast_poll_complete", elapsed=elapsed)
 
     async def run_monitoring(self) -> None:
         logger.debug("running_monitoring")
