@@ -42,6 +42,8 @@ RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 # Copy application code
 COPY --chown=turtle:turtle . .
 
+RUN mkdir -p /app/logs /app/results && chown turtle:turtle /app/logs /app/results
+
 # Switch to non-root user
 USER turtle
 
