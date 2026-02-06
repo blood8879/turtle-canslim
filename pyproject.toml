@@ -14,6 +14,10 @@ dependencies = [
     # 한투 API
     "mojito2>=0.1.0",
     
+    # 시장 데이터
+    "pykrx>=1.0.0",
+    "yfinance>=0.2.0",
+    
     # 데이터 처리
     "pandas>=2.0.0",
     "numpy>=1.24.0",
