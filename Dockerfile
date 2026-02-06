@@ -42,9 +42,6 @@ RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 # Copy application code
 COPY --chown=turtle:turtle . .
 
-# Install the application
-RUN pip install --no-cache-dir -e .
-
 # Switch to non-root user
 USER turtle
 
