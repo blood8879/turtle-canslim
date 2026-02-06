@@ -57,4 +57,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "from src.core.config import get_settings; get_settings()" || exit 1
 
 # Default command (can be overridden)
-CMD ["python", "scripts/run_trading.py", "--mode", "paper"]
+CMD ["python", "scripts/run_trading.py", "--market", "both"]
