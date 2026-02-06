@@ -139,12 +139,14 @@ class TradingScheduler:
         )
 
         close_hour, close_min = map(int, schedule.market_close.split(":"))
+        report_min = (close_min + 30) % 60
+        report_hour = close_hour + (close_min + 30) // 60
         self.add_job(
             "krx_daily_report",
             daily_report_func,
             CronTrigger(
-                hour=close_hour,
-                minute=close_min + 30,
+                hour=report_hour,
+                minute=report_min,
                 day_of_week="mon-fri",
                 timezone=KST,
             ),
