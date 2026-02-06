@@ -91,7 +91,7 @@ services:
     networks:
       - turtle-net
     # Run trading bot by default
-    command: ["python", "scripts/run_trading.py", "--mode", "${TRADING_MODE:-paper}"]
+    command: ["python", "scripts/run_trading.py", "--mode", "${TRADING_MODE:-paper}", "--market", "both"]
 
   # ============================================
   # Screener Service (one-shot or scheduled)
