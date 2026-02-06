@@ -12,12 +12,18 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy project files needed for build
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir build && \
-    pip wheel --no-cache-dir --wheel-dir /wheels -e ".[dev]"
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY README.md ./
+
+# Build wheels for all dependencies
+RUN pip install --no-cache-dir build pip-tools && \
+    pip wheel --no-cache-dir --wheel-dir /wheels ".[dev]"
 
 # ============================================
 # Stage 2: Runtime

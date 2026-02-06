@@ -13,6 +13,7 @@ keywords = ["trading", "stocks", "canslim", "turtle-trading", "automation"]
 dependencies = [
     # 한투 API
     "mojito2>=0.1.0",
+    "python-kis>=1.0.0",
     
     # 시장 데이터
     "pykrx>=1.0.0",
@@ -127,6 +128,9 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = [
     "mojito.*",
+    "python_kis.*",
+    "pykrx.*",
+    "yfinance.*",
     "backtesting.*",
     "vectorbt.*",
     "apscheduler.*",
