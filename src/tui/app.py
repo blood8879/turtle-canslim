@@ -138,7 +138,7 @@ class CandidatesTable(Static):
     def on_mount(self) -> None:
         table = self.query_one("#candidates-table", DataTable)
         table.add_columns(
-            "종목코드", "종목명", "점수", "C", "A", "N", "S", "L", "I", "M", "RS", "EPS%"
+            "종목코드", "종목명", "점수", "C", "A", "N", "S", "L", "I", "M", "RS", "EPS%", "매출%", "ROE"
         )
         table.cursor_type = "row"
         table.zebra_stripes = True
@@ -157,6 +157,12 @@ class CandidatesTable(Static):
             eps_growth = c.get("eps_growth")
             eps_str = f"{eps_growth:.0%}" if eps_growth else "-"
 
+            revenue_growth = c.get("revenue_growth")
+            revenue_str = f"{revenue_growth:.0%}" if revenue_growth else "-"
+
+            roe = c.get("roe")
+            roe_str = f"{roe:.1%}" if roe else "-"
+
             table.add_row(
                 c.get("symbol", ""),
                 _truncate_wide(c.get("name", ""), 12),
@@ -170,6 +176,8 @@ class CandidatesTable(Static):
                 indicator(c.get("m")),
                 str(c.get("rs", "-")),
                 eps_str,
+                revenue_str,
+                roe_str,
             )
 
 
@@ -618,17 +626,30 @@ class TurtleCANSLIMApp(App):
 
         try:
             from src.core.database import get_db_manager
-            from src.data.repositories import CANSLIMScoreRepository, StockRepository
+            from src.data.repositories import CANSLIMScoreRepository, StockRepository, FundamentalRepository
 
             db = get_db_manager()
             async with db.session() as session:
                 score_repo = CANSLIMScoreRepository(session)
                 stock_repo = StockRepository(session)
+                fundamental_repo = FundamentalRepository(session)
                 scores = await score_repo.get_candidates(min_score=4)
 
                 for score in scores[:50]:  # Limit to 50
                     stock = await stock_repo.get_by_id(score.stock_id)
                     if stock:
+                        roe_value = None
+                        try:
+                            latest_annual = await fundamental_repo.get_latest_annual(score.stock_id, years=1)
+                            if latest_annual and latest_annual[0].roe is not None:
+                                roe_value = float(latest_annual[0].roe)
+                            else:
+                                latest_q = await fundamental_repo.get_latest_quarterly(score.stock_id)
+                                if latest_q and latest_q.roe is not None:
+                                    roe_value = float(latest_q.roe)
+                        except Exception:
+                            pass
+
                         self._candidates.append(
                             {
                                 "symbol": stock.symbol,
@@ -645,6 +666,10 @@ class TurtleCANSLIMApp(App):
                                 "eps_growth": float(score.c_eps_growth)
                                 if score.c_eps_growth
                                 else None,
+                                "revenue_growth": float(score.c_revenue_growth)
+                                if score.c_revenue_growth
+                                else None,
+                                "roe": roe_value,
                             }
                         )
         except Exception:
