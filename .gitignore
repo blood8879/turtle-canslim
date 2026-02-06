@@ -163,3 +163,4 @@ secrets.json
 
 # Ruff cache
 .ruff_cache/
+token.dat
