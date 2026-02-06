@@ -422,6 +422,7 @@ class TurtleCANSLIMApp(App):
         Binding("n", "run_screening_us", "US스크리닝"),
         Binding("t", "toggle_trading_krx", "KRX트레이딩"),
         Binding("y", "toggle_trading_us", "US트레이딩"),
+        Binding("m", "toggle_trading_mode", "모의/실전"),
         Binding("d", "toggle_dark", "다크/라이트"),
         Binding("1", "show_tab('portfolio')", "포트폴리오", show=False),
         Binding("2", "show_tab('candidates')", "후보종목", show=False),
@@ -568,6 +569,15 @@ class TurtleCANSLIMApp(App):
 
     def action_toggle_dark(self) -> None:
         self.dark = not self.dark
+
+    def action_toggle_trading_mode(self) -> None:
+        if self._settings.trading_mode == TradingMode.PAPER:
+            self._settings.trading_mode = TradingMode.LIVE
+            self.log_message("[bold red]⚠ 실전 모드로 전환됨! 실제 매매가 실행됩니다.[/]")
+        else:
+            self._settings.trading_mode = TradingMode.PAPER
+            self.log_message("[bold green]모의 모드로 전환됨[/]")
+        self._update_status()
 
     def action_show_tab(self, tab: str) -> None:
         tabbed = self.query_one(TabbedContent)
