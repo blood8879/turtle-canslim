@@ -680,7 +680,7 @@ class TurtleCANSLIMApp(App):
                 fundamental_repo = FundamentalRepository(session)
                 scores = await score_repo.get_candidates(min_score=4)
 
-                for score in scores[:50]:  # Limit to 50
+                for score in scores:
                     stock = await stock_repo.get_by_id(score.stock_id)
                     if stock:
                         roe_value = None
