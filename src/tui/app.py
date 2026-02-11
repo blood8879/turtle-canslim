@@ -487,6 +487,28 @@ class TurtleCANSLIMApp(App):
                 "[yellow]⚠ 한글이 깨져 보이면 iTerm2/WezTerm/Kitty 터미널을 사용하세요[/]"
             )
         self.refresh_data()
+        self._restore_trading_state()
+
+    @work(exclusive=False)
+    async def _restore_trading_state(self) -> None:
+        try:
+            from src.core.database import get_db_manager
+            from src.data.repositories import TradingStateRepository
+
+            db = get_db_manager()
+            async with db.session() as session:
+                repo = TradingStateRepository(session)
+                krx_was_active = await repo.get_trading_state("krx")
+                us_was_active = await repo.get_trading_state("us")
+
+            if krx_was_active:
+                self.log_message("[cyan]이전 KRX 트레이딩 상태 복원 중...[/]")
+                self.action_run_trading_krx()
+            if us_was_active:
+                self.log_message("[cyan]이전 US 트레이딩 상태 복원 중...[/]")
+                self.action_run_trading_us()
+        except Exception as e:
+            self.log_message(f"[red]트레이딩 상태 복원 실패: {e}[/]")
 
     def log_message(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")

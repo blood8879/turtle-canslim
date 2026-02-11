@@ -675,6 +675,13 @@ class TradingStateRepository:
         age = (datetime.utcnow() - hb.updated_at).total_seconds()
         return age < 120
 
+    async def get_trading_state(self, market: str) -> bool:
+        key = self.TRADING_KRX_KEY if market == "krx" else self.TRADING_US_KEY
+        state = await self._get(key)
+        if not state:
+            return False
+        return state.value == "1"
+
     async def update_heartbeat(self, market: str) -> None:
         key = self.HEARTBEAT_KEY_PREFIX + market
         await self._upsert(key, "alive")
