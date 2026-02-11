@@ -17,6 +17,7 @@ from src.data.models import (
     PositionStatus,
     Signal,
     Stock,
+    TradingState,
     UnitAllocation,
 )
 
@@ -632,3 +633,48 @@ class UnitAllocationRepository:
         self._session.add(allocation)
         await self._session.flush()
         return allocation
+
+
+class TradingStateRepository:
+    TRADING_KRX_KEY = "trading_active_krx"
+    TRADING_US_KEY = "trading_active_us"
+    HEARTBEAT_KEY_PREFIX = "heartbeat_"
+
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def _upsert(self, key: str, value: str) -> None:
+        stmt = pg_insert(TradingState).values(
+            key=key, value=value, updated_at=datetime.utcnow()
+        ).on_conflict_do_update(
+            index_elements=["key"],
+            set_={"value": value, "updated_at": datetime.utcnow()},
+        )
+        await self._session.execute(stmt)
+
+    async def _get(self, key: str) -> TradingState | None:
+        stmt = select(TradingState).where(TradingState.key == key)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def set_trading_active(self, market: str, active: bool) -> None:
+        key = self.TRADING_KRX_KEY if market == "krx" else self.TRADING_US_KEY
+        await self._upsert(key, "1" if active else "0")
+
+    async def is_trading_active(self, market: str) -> bool:
+        key = self.TRADING_KRX_KEY if market == "krx" else self.TRADING_US_KEY
+        state = await self._get(key)
+        if not state:
+            return False
+        if state.value != "1":
+            return False
+        heartbeat_key = self.HEARTBEAT_KEY_PREFIX + market
+        hb = await self._get(heartbeat_key)
+        if not hb:
+            return False
+        age = (datetime.utcnow() - hb.updated_at).total_seconds()
+        return age < 120
+
+    async def update_heartbeat(self, market: str) -> None:
+        key = self.HEARTBEAT_KEY_PREFIX + market
+        await self._upsert(key, "alive")

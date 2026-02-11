@@ -620,15 +620,55 @@ class TurtleCANSLIMApp(App):
 
     @work(exclusive=True)
     async def refresh_data(self) -> None:
-        """Refresh all data from database."""
         try:
             await self._load_portfolio()
             await self._load_candidates()
             await self._load_signals()
+            await self._sync_daemon_trading_state()
             self._update_status()
             self.log_message("[green]데이터 새로고침 완료[/]")
         except Exception as e:
             self.log_message(f"[red]데이터 새로고침 오류: {e}[/]")
+
+    async def _sync_daemon_trading_state(self) -> None:
+        try:
+            from src.core.database import get_db_manager
+            from src.data.repositories import TradingStateRepository
+
+            db = get_db_manager()
+            async with db.session() as session:
+                repo = TradingStateRepository(session)
+                krx_active = await repo.is_trading_active("krx")
+                us_active = await repo.is_trading_active("us")
+
+            if krx_active and not self._trading_active_krx:
+                self._trading_active_krx = True
+                btn = self.query_one("#btn-trade-krx", Button)
+                btn.label = "KRX Stop [T]"
+                btn.variant = "error"
+                self.log_message("[cyan]데몬 KRX 트레이딩 활성 상태 감지[/]")
+
+            if us_active and not self._trading_active_us:
+                self._trading_active_us = True
+                btn = self.query_one("#btn-trade-us", Button)
+                btn.label = "US Stop [Y]"
+                btn.variant = "error"
+                self.log_message("[cyan]데몬 US 트레이딩 활성 상태 감지[/]")
+
+            if not krx_active and self._trading_active_krx:
+                self._trading_active_krx = False
+                btn = self.query_one("#btn-trade-krx", Button)
+                btn.label = "KRX Trade [T]"
+                btn.variant = "warning"
+
+            if not us_active and self._trading_active_us:
+                self._trading_active_us = False
+                btn = self.query_one("#btn-trade-us", Button)
+                btn.label = "US Trade [Y]"
+                btn.variant = "warning"
+
+        except Exception:
+            pass
 
     async def _load_portfolio(self) -> None:
         """Load portfolio positions from database."""
@@ -879,8 +919,33 @@ class TurtleCANSLIMApp(App):
         """Run continuous US trading until user stops."""
         await self._run_trading_loop("us")
 
+    async def _set_trading_state_db(self, market: str, active: bool) -> None:
+        try:
+            from src.core.database import get_db_manager
+            from src.data.repositories import TradingStateRepository
+
+            db = get_db_manager()
+            async with db.session() as session:
+                repo = TradingStateRepository(session)
+                await repo.set_trading_active(market, active)
+                if active:
+                    await repo.update_heartbeat(market)
+        except Exception:
+            pass
+
+    async def _update_heartbeat_db(self, market: str) -> None:
+        try:
+            from src.core.database import get_db_manager
+            from src.data.repositories import TradingStateRepository
+
+            db = get_db_manager()
+            async with db.session() as session:
+                repo = TradingStateRepository(session)
+                await repo.update_heartbeat(market)
+        except Exception:
+            pass
+
     async def _run_trading_loop(self, target_market: str) -> None:
-        """Run continuous trading loop for a specific market."""
         from src.core.scheduler import TradingScheduler
 
         scheduler = TradingScheduler(self._settings)
@@ -909,6 +974,8 @@ class TurtleCANSLIMApp(App):
                 "US Stop [Y]",
                 "US Trade [Y]",
             )
+
+        await self._set_trading_state_db(target_market, True)
 
         trade_btn = self.query_one(btn_id, Button)
         trade_btn.label = btn_label_stop
@@ -1139,6 +1206,7 @@ class TurtleCANSLIMApp(App):
 
                     await self._load_signals()
                     await self._load_portfolio()
+                    await self._update_heartbeat_db(target_market)
                     self._update_status()
 
                     self.log_message(
@@ -1254,6 +1322,7 @@ class TurtleCANSLIMApp(App):
             self.log_message(f"[red]{market_label} 트레이딩 오류: {e}[/]")
 
         finally:
+            await self._set_trading_state_db(target_market, False)
             if is_krx:
                 self._trading_active_krx = False
             else:
@@ -1263,7 +1332,6 @@ class TurtleCANSLIMApp(App):
             trade_btn.variant = "warning"
 
     def action_stop_trading_krx(self) -> None:
-        """Stop the KRX trading loop."""
         if self._trading_active_krx:
             self._trading_active_krx = False
             self.log_message(

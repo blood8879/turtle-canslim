@@ -21,6 +21,7 @@ from src.data.repositories import (
     OrderRepository,
     CANSLIMScoreRepository,
     FundamentalRepository,
+    TradingStateRepository,
 )
 from src.data.auto_fetcher import AutoDataFetcher
 from src.screener.canslim import CANSLIMScreener
@@ -714,10 +715,28 @@ class TradingBot:
         finally:
             await self.shutdown()
 
+    async def _set_trading_state(self, active: bool) -> None:
+        async with self._db.session() as session:
+            repo = TradingStateRepository(session)
+            if self._market in ["krx", "both"]:
+                await repo.set_trading_active("krx", active)
+            if self._market in ["us", "both"]:
+                await repo.set_trading_active("us", active)
+
+    async def _update_heartbeat(self) -> None:
+        async with self._db.session() as session:
+            repo = TradingStateRepository(session)
+            if self._market in ["krx", "both"]:
+                await repo.update_heartbeat("krx")
+            if self._market in ["us", "both"]:
+                await repo.update_heartbeat("us")
+
     async def run_scheduled(self) -> None:
         await self.initialize()
 
         try:
+            await self._set_trading_state(active=True)
+
             self._scheduler.setup_data_update_schedule(
                 data_update_func=self.run_data_update,
             )
@@ -745,9 +764,15 @@ class TradingBot:
             logger.info("trading_bot_running")
             print("\nTrading bot is running. Press Ctrl+C to stop.\n")
 
-            await shutdown_event.wait()
+            while not shutdown_event.is_set():
+                await self._update_heartbeat()
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    pass
 
         finally:
+            await self._set_trading_state(active=False)
             await self.shutdown()
 
 
