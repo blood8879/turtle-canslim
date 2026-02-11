@@ -17,14 +17,11 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
+from textual.containers import Container, ScrollableContainer
 from textual.widgets import (
-    Button,
     DataTable,
     Footer,
     Header,
-    Label,
-    LoadingIndicator,
     ProgressBar,
     RichLog,
     Static,
@@ -81,13 +78,20 @@ class StatusPanel(Static):
         units: int = 0,
         candidates: int = 0,
         last_scan: str = "-",
+        trading_krx: bool = False,
+        trading_us: bool = False,
     ) -> None:
         mode = self._settings.trading_mode.value.upper()
         mode_color = "green" if mode == "PAPER" else "red"
 
+        krx_status = "[green bold]ON[/]" if trading_krx else "[dim]OFF[/]"
+        us_status = "[green bold]ON[/]" if trading_us else "[dim]OFF[/]"
+
         content = self.query_one("#status-content", Static)
         content.update(
             f"[bold]모드:[/] [{mode_color}]{mode}[/]  "
+            f"[bold]KRX:[/] {krx_status}  "
+            f"[bold]US:[/] {us_status}  "
             f"[bold]포지션:[/] {positions}  "
             f"[bold]유닛:[/] {units}/20  "
             f"[bold]후보종목:[/] {candidates}  "
@@ -233,42 +237,31 @@ class KeyboardShortcutsPanel(Static):
         text = """[bold cyan]═══ 전역 단축키 ═══[/]
 
 [bold yellow]Q[/]    종료
-[bold yellow]R[/]    데이터 새로고침 (DB에서 다시 읽기)
-[bold yellow]U[/]    데이터 갱신 (최신 가격 업데이트)
-[bold yellow]S[/]    전체 CANSLIM 스크리닝 (KRX + US)
-[bold yellow]K[/]    KRX CANSLIM 스크리닝
-[bold yellow]N[/]    US CANSLIM 스크리닝
-[bold yellow]T[/]    트레이딩 사이클 실행
+[bold yellow]R[/]    데이터 새로고침
+[bold yellow]U[/]    데이터 갱신 (최신 가격)
+[bold yellow]S[/]    전체 스크리닝 (KRX + US)
+[bold yellow]K[/]    KRX 스크리닝
+[bold yellow]N[/]    US 스크리닝
+[bold yellow]T[/]    KRX 트레이딩 시작/중지
+[bold yellow]Y[/]    US 트레이딩 시작/중지
+[bold yellow]M[/]    모의/실전 모드 전환
 [bold yellow]D[/]    다크/라이트 모드 전환
 
 [bold cyan]═══ 탭 전환 ═══[/]
 
-[bold yellow]1[/]    Portfolio 탭
-[bold yellow]2[/]    Candidates 탭
-[bold yellow]3[/]    Signals 탭
-[bold yellow]4[/]    Log 탭
-[bold yellow]5[/]    Settings 탭
-[bold yellow]6[/]    Shortcuts 탭 (현재)
+[bold yellow]←/→[/]  이전/다음 탭 전환
+[bold yellow]1-6[/]  탭 직접 선택 (Portfolio/Candidates/Signals/Log/Settings/Shortcuts)
 
 [bold cyan]═══ 테이블 내 이동 ═══[/]
 
 [bold yellow]↑/↓[/]  행 이동
-[bold yellow]←/→[/]  열 이동 (가능한 경우)
-[bold yellow]Enter[/] 선택
-
-[bold cyan]═══ 일반 ═══[/]
-
-[bold yellow]Ctrl+P[/]  명령 팔레트 열기
-[bold yellow]Escape[/]  팝업/모달 닫기
 
 [bold cyan]═══ 사용 팁 ═══[/]
 
-• [bold]S[/] 키: 전체(KRX+US) 데이터 자동 수집 후 스크리닝
-• [bold]K[/] 키: KRX만 스크리닝 (국내 종목)
-• [bold]N[/] 키: US만 스크리닝 (해외 종목)
-• [bold]U[/] 키: 오래된 가격 데이터를 최신으로 업데이트
-• 후보종목 탭에서 CANSLIM 점수 확인 가능
-• 로그 패널에서 실시간 진행 상황 확인
+• 상단 상태바에서 KRX/US 트레이딩 ON/OFF 확인
+• [bold]S[/] 키: 전체 데이터 자동 수집 후 스크리닝
+• Log 탭(4)에서 전체 매매 로그 확인
+• 로그는 logs/ 디렉토리에 자동 저장됨
 """
         content.update(text)
 
@@ -330,10 +323,10 @@ class SettingsPanel(Static):
 
 
 class TurtleCANSLIMApp(App):
-    """Turtle-CANSLIM Terminal User Interface."""
 
     TITLE = "터틀-캔슬림"
     SUB_TITLE = "CANSLIM + 터틀 트레이딩 시스템"
+    ENABLE_COMMAND_PALETTE = False
 
     CSS = """
     Screen {
@@ -361,16 +354,6 @@ class TurtleCANSLIMApp(App):
 
     DataTable {
         height: 1fr;
-    }
-
-    #action-buttons {
-        height: 3;
-        align: center middle;
-        padding: 0 1;
-    }
-
-    #action-buttons Button {
-        margin: 0 1;
     }
 
     #log-panel {
@@ -421,6 +404,8 @@ class TurtleCANSLIMApp(App):
     }
     """
 
+    _TAB_IDS = ["portfolio", "candidates", "signals", "log", "settings", "shortcuts"]
+
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
@@ -432,6 +417,8 @@ class TurtleCANSLIMApp(App):
         Binding("y", "toggle_trading_us", "US Trade"),
         Binding("m", "toggle_trading_mode", "Mode"),
         Binding("d", "toggle_dark", "Dark/Light"),
+        Binding("left", "prev_tab", "Prev Tab"),
+        Binding("right", "next_tab", "Next Tab"),
         Binding("1", "show_tab('portfolio')", "Portfolio", show=False),
         Binding("2", "show_tab('candidates')", "Candidates", show=False),
         Binding("3", "show_tab('signals')", "Signals", show=False),
@@ -481,13 +468,6 @@ class TurtleCANSLIMApp(App):
                 with TabPane("Shortcuts", id="shortcuts"):
                     with ScrollableContainer():
                         yield KeyboardShortcutsPanel()
-        with Horizontal(id="action-buttons"):
-            yield Button("Refresh [R]", id="btn-refresh", variant="default")
-            yield Button("KRX Screen [K]", id="btn-screen-krx", variant="primary")
-            yield Button("US Screen [N]", id="btn-screen-us", variant="primary")
-            yield Button("All Screen [S]", id="btn-screen", variant="primary")
-            yield Button("KRX Trade [T]", id="btn-trade-krx", variant="warning")
-            yield Button("US Trade [Y]", id="btn-trade-us", variant="warning")
         yield Static(id="progress-status", classes="progress-hidden")
         yield ProgressBar(id="progress-bar", total=100, show_eta=False, classes="progress-hidden")
         yield RichLog(id="log-panel", highlight=True, markup=True)
@@ -507,26 +487,6 @@ class TurtleCANSLIMApp(App):
                 "[yellow]⚠ 한글이 깨져 보이면 iTerm2/WezTerm/Kitty 터미널을 사용하세요[/]"
             )
         self.refresh_data()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-refresh":
-            self.action_refresh()
-        elif event.button.id == "btn-screen-krx":
-            self.action_run_screening_krx()
-        elif event.button.id == "btn-screen-us":
-            self.action_run_screening_us()
-        elif event.button.id == "btn-screen":
-            self.action_run_screening_default()
-        elif event.button.id == "btn-trade-krx":
-            if self._trading_active_krx:
-                self.action_stop_trading_krx()
-            else:
-                self.action_run_trading_krx()
-        elif event.button.id == "btn-trade-us":
-            if self._trading_active_us:
-                self.action_stop_trading_us()
-            else:
-                self.action_run_trading_us()
 
     def log_message(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -618,6 +578,18 @@ class TurtleCANSLIMApp(App):
         tabbed = self.query_one(TabbedContent)
         tabbed.active = tab
 
+    def action_prev_tab(self) -> None:
+        tabbed = self.query_one(TabbedContent)
+        current = tabbed.active
+        idx = self._TAB_IDS.index(current) if current in self._TAB_IDS else 0
+        tabbed.active = self._TAB_IDS[(idx - 1) % len(self._TAB_IDS)]
+
+    def action_next_tab(self) -> None:
+        tabbed = self.query_one(TabbedContent)
+        current = tabbed.active
+        idx = self._TAB_IDS.index(current) if current in self._TAB_IDS else 0
+        tabbed.active = self._TAB_IDS[(idx + 1) % len(self._TAB_IDS)]
+
     @work(exclusive=True)
     async def refresh_data(self) -> None:
         try:
@@ -643,29 +615,17 @@ class TurtleCANSLIMApp(App):
 
             if krx_active and not self._trading_active_krx:
                 self._trading_active_krx = True
-                btn = self.query_one("#btn-trade-krx", Button)
-                btn.label = "KRX Stop [T]"
-                btn.variant = "error"
                 self.log_message("[cyan]데몬 KRX 트레이딩 활성 상태 감지[/]")
 
             if us_active and not self._trading_active_us:
                 self._trading_active_us = True
-                btn = self.query_one("#btn-trade-us", Button)
-                btn.label = "US Stop [Y]"
-                btn.variant = "error"
                 self.log_message("[cyan]데몬 US 트레이딩 활성 상태 감지[/]")
 
             if not krx_active and self._trading_active_krx:
                 self._trading_active_krx = False
-                btn = self.query_one("#btn-trade-krx", Button)
-                btn.label = "KRX Trade [T]"
-                btn.variant = "warning"
 
             if not us_active and self._trading_active_us:
                 self._trading_active_us = False
-                btn = self.query_one("#btn-trade-us", Button)
-                btn.label = "US Trade [Y]"
-                btn.variant = "warning"
 
         except Exception:
             pass
@@ -796,7 +756,6 @@ class TurtleCANSLIMApp(App):
         signals_table.update_data(self._signals)
 
     def _update_status(self) -> None:
-        """Update status panel."""
         total_units = sum(p.get("units", 0) for p in self._positions)
         last_scan = datetime.now().strftime("%H:%M:%S")
 
@@ -806,6 +765,8 @@ class TurtleCANSLIMApp(App):
             units=total_units,
             candidates=len(self._candidates),
             last_scan=last_scan,
+            trading_krx=self._trading_active_krx,
+            trading_us=self._trading_active_us,
         )
 
     def action_run_screening_default(self) -> None:
@@ -962,24 +923,10 @@ class TurtleCANSLIMApp(App):
         is_krx = target_market == "krx"
         if is_krx:
             self._trading_active_krx = True
-            btn_id, btn_label_stop, btn_label_start = (
-                "#btn-trade-krx",
-                "KRX Stop [T]",
-                "KRX Trade [T]",
-            )
         else:
             self._trading_active_us = True
-            btn_id, btn_label_stop, btn_label_start = (
-                "#btn-trade-us",
-                "US Stop [Y]",
-                "US Trade [Y]",
-            )
 
         await self._set_trading_state_db(target_market, True)
-
-        trade_btn = self.query_one(btn_id, Button)
-        trade_btn.label = btn_label_stop
-        trade_btn.variant = "error"
 
         interval_minutes = self._settings.turtle.signal_check_interval_minutes
         market_label = target_market.upper()
@@ -1327,9 +1274,7 @@ class TurtleCANSLIMApp(App):
                 self._trading_active_krx = False
             else:
                 self._trading_active_us = False
-            trade_btn = self.query_one(btn_id, Button)
-            trade_btn.label = btn_label_start
-            trade_btn.variant = "warning"
+            self.log_message(f"[green]{target_market.upper()} 트레이딩 종료[/]")
 
     def action_stop_trading_krx(self) -> None:
         if self._trading_active_krx:
