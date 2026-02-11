@@ -1035,17 +1035,27 @@ class TurtleCANSLIMApp(App):
                             position_repo=position_repo,
                         )
 
-                        async def fetch_realtime_prices(stock_ids: list[int]) -> dict[int, Decimal]:
+                        async def fetch_realtime_prices(stock_ids: list[int], batch_size: int = 20) -> dict[int, Decimal]:
                             prices: dict[int, Decimal] = {}
-                            for sid in stock_ids:
+                            
+                            async def fetch_single(sid: int) -> tuple[int, Decimal | None]:
                                 try:
                                     stock = await stock_repo.get_by_id(sid)
                                     if stock:
                                         price = await broker.get_current_price(stock.symbol)
                                         if price and price > 0:
-                                            prices[sid] = price
+                                            return (sid, price)
                                 except Exception:
                                     pass
+                                return (sid, None)
+                            
+                            for i in range(0, len(stock_ids), batch_size):
+                                batch = stock_ids[i:i + batch_size]
+                                results = await asyncio.gather(*[fetch_single(sid) for sid in batch])
+                                for sid, price in results:
+                                    if price is not None:
+                                        prices[sid] = price
+                            
                             return prices
 
                         open_positions = await position_repo.get_open_positions()
