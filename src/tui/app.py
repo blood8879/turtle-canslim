@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import unicodedata
@@ -241,11 +243,12 @@ class KeyboardShortcutsPanel(Static):
 
 [bold cyan]═══ 탭 전환 ═══[/]
 
-[bold yellow]1[/]    포트폴리오 탭
-[bold yellow]2[/]    후보종목 탭
-[bold yellow]3[/]    시그널 탭
-[bold yellow]4[/]    설정 탭
-[bold yellow]5[/]    단축키 탭 (현재)
+[bold yellow]1[/]    Portfolio 탭
+[bold yellow]2[/]    Candidates 탭
+[bold yellow]3[/]    Signals 탭
+[bold yellow]4[/]    Log 탭
+[bold yellow]5[/]    Settings 탭
+[bold yellow]6[/]    Shortcuts 탭 (현재)
 
 [bold cyan]═══ 테이블 내 이동 ═══[/]
 
@@ -375,6 +378,11 @@ class TurtleCANSLIMApp(App):
         border-top: solid $primary;
     }
 
+    #log-tab-panel {
+        height: 1fr;
+        background: $surface-darken-1;
+    }
+
     RichLog {
         height: 1fr;
         background: $surface-darken-1;
@@ -427,8 +435,9 @@ class TurtleCANSLIMApp(App):
         Binding("1", "show_tab('portfolio')", "Portfolio", show=False),
         Binding("2", "show_tab('candidates')", "Candidates", show=False),
         Binding("3", "show_tab('signals')", "Signals", show=False),
-        Binding("4", "show_tab('settings')", "Settings", show=False),
-        Binding("5", "show_tab('shortcuts')", "Shortcuts", show=False),
+        Binding("4", "show_tab('log')", "Log", show=False),
+        Binding("5", "show_tab('settings')", "Settings", show=False),
+        Binding("6", "show_tab('shortcuts')", "Shortcuts", show=False),
     ]
 
     def __init__(self) -> None:
@@ -440,6 +449,18 @@ class TurtleCANSLIMApp(App):
         self._screening_progress = ScreeningProgress()
         self._trading_active_krx: bool = False
         self._trading_active_us: bool = False
+        self._log_file = self._init_log_file()
+
+    @staticmethod
+    def _init_log_file() -> Path | None:
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        log_path = log_dir / f"tui_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        try:
+            log_path.touch()
+            return log_path
+        except OSError:
+            return None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -452,6 +473,8 @@ class TurtleCANSLIMApp(App):
                     yield CandidatesTable()
                 with TabPane("Signals", id="signals"):
                     yield SignalsTable()
+                with TabPane("Log", id="log"):
+                    yield RichLog(id="log-tab-panel", highlight=True, markup=True)
                 with TabPane("Settings", id="settings"):
                     with ScrollableContainer():
                         yield SettingsPanel()
@@ -473,8 +496,10 @@ class TurtleCANSLIMApp(App):
     def on_mount(self) -> None:
         self.log_message("[bold green]터틀-캔슬림 TUI 시작됨[/]")
         self.log_message(f"모드: {self._settings.trading_mode.value.upper()}")
+        if self._log_file:
+            self.log_message(f"[dim]로그 파일: {self._log_file}[/]")
         self.log_message(
-            "[bold]R[/] 새로고침 | [bold]K[/] KRX | [bold]N[/] US | [bold]S[/] 전체 스크리닝 | [bold]T[/] KRX트레이딩 | [bold]Y[/] US트레이딩 | [bold]Q[/] 종료"
+            "[bold]R[/] Refresh | [bold]K[/] KRX | [bold]N[/] US | [bold]S[/] Screen | [bold]T[/] KRX Trade | [bold]Y[/] US Trade | [bold]Q[/] Quit"
         )
         term = os.environ.get("TERM_PROGRAM", "")
         if term in ("Apple_Terminal",):
@@ -504,9 +529,19 @@ class TurtleCANSLIMApp(App):
                 self.action_run_trading_us()
 
     def log_message(self, message: str) -> None:
-        log = self.query_one("#log-panel", RichLog)
         timestamp = datetime.now().strftime("%H:%M:%S")
-        log.write(f"[dim]{timestamp}[/] {message}")
+        formatted = f"[dim]{timestamp}[/] {message}"
+
+        self.query_one("#log-panel", RichLog).write(formatted)
+        self.query_one("#log-tab-panel", RichLog).write(formatted)
+
+        if self._log_file:
+            try:
+                plain = re.sub(r"\[/?[^\]]*\]", "", f"{timestamp} {message}")
+                with open(self._log_file, "a", encoding="utf-8") as f:
+                    f.write(plain + "\n")
+            except OSError:
+                pass
 
     def action_refresh(self) -> None:
         self.log_message("데이터 새로고침 중...")
