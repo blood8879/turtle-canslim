@@ -9,7 +9,7 @@ from src.core.exceptions import KISAPIError
 from src.core.logger import get_logger
 
 if TYPE_CHECKING:
-    from python_kis import KoreaInvestment
+    from mojito import KoreaInvestment
 
 logger = get_logger(__name__)
 
@@ -48,13 +48,14 @@ class USOrderResult:
 
 class USMarketClient:
     EXCHANGES = {
-        "NYSE": "NYS",
-        "NASDAQ": "NAS",
-        "AMEX": "AMS",
+        "NYSE": "뉴욕",
+        "NASDAQ": "나스닥",
+        "AMEX": "아멕스",
     }
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Settings | None = None, exchange: str = "NASDAQ"):
         self._settings = settings or get_settings()
+        self._exchange = exchange
         self._client: KoreaInvestment | None = None
 
     @property
@@ -68,22 +69,25 @@ class USMarketClient:
         return self._client
 
     def _create_client(self) -> KoreaInvestment:
-        from python_kis import KoreaInvestment
+        from mojito import KoreaInvestment
 
         app_key, app_secret, account = self._settings.active_kis_credentials
 
         if not all([app_key, app_secret, account]):
             raise KISAPIError("KIS API credentials not configured")
 
+        exchange_kr = self.EXCHANGES.get(self._exchange, "나스닥")
         logger.info(
             "creating_us_market_client",
             mode="paper" if self.is_paper_mode else "live",
+            exchange=exchange_kr,
         )
 
         return KoreaInvestment(
             api_key=app_key,
             api_secret=app_secret,
             acc_no=account,
+            exchange=exchange_kr,
             mock=self.is_paper_mode,
         )
 
@@ -92,11 +96,7 @@ class USMarketClient:
 
     async def get_current_price(self, symbol: str, exchange: str = "NASDAQ") -> dict[str, Any]:
         try:
-            excd = self._get_exchange_code(exchange)
-            response = self.client.fetch_overseas_price(
-                symbol=symbol,
-                exchange=excd,
-            )
+            response = self.client.fetch_oversea_price(symbol=symbol)
 
             return {
                 "symbol": symbol,
@@ -120,10 +120,8 @@ class USMarketClient:
         period: int = 100,
     ) -> list[USPriceData]:
         try:
-            excd = self._get_exchange_code(exchange)
-            response = self.client.fetch_overseas_ohlcv(
+            response = self.client.fetch_ohlcv_overesea(
                 symbol=symbol,
-                exchange=excd,
                 timeframe="D",
                 adj_price=True,
             )
@@ -157,12 +155,33 @@ class USMarketClient:
 
     async def get_balance(self) -> dict[str, Any]:
         try:
-            response = self.client.fetch_overseas_balance()
+            response = self.client.fetch_balance_oversea()
+            output2_raw = response.get("output2", {})
+            output2: dict[str, Any] = {}
+            if isinstance(output2_raw, list) and len(output2_raw) > 0:
+                output2 = output2_raw[0]
+            elif isinstance(output2_raw, dict):
+                output2 = output2_raw
+
+            total_value = Decimal(str(output2.get("tot_evlu_pfls_amt", 0)))
+            securities_value = Decimal(str(output2.get("ovrs_stck_evlu_amt", 0)))
+            available_cash = Decimal(str(output2.get("frcr_pchs_amt1", 0)))
+
+            if available_cash == 0:
+                available_cash = Decimal(str(output2.get("frcr_buy_amt_smtl", 0)))
+
+            logger.debug(
+                "us_balance_fetched",
+                total_value=float(total_value),
+                available_cash=float(available_cash),
+                securities_value=float(securities_value),
+                raw_output2=output2,
+            )
 
             return {
-                "total_value_usd": Decimal(str(response.get("tot_evlu_pfls_amt", 0))),
-                "available_cash_usd": Decimal(str(response.get("frcr_pchs_amt", 0))),
-                "securities_value_usd": Decimal(str(response.get("evlu_amt_smtl", 0))),
+                "total_value_usd": total_value,
+                "available_cash_usd": available_cash,
+                "securities_value_usd": securities_value,
             }
         except Exception as e:
             logger.error("us_fetch_balance_error", error=str(e))
@@ -170,7 +189,7 @@ class USMarketClient:
 
     async def get_holdings(self) -> list[dict[str, Any]]:
         try:
-            response = self.client.fetch_overseas_balance()
+            response = self.client.fetch_balance_oversea()
             holdings: list[dict[str, Any]] = []
 
             for item in response.get("output1", []):
@@ -201,11 +220,12 @@ class USMarketClient:
             logger.warning("us_live_buy_attempt", symbol=symbol, quantity=quantity)
 
         try:
-            excd = self._get_exchange_code(exchange)
-            response = self.client.create_overseas_market_buy_order(
+            response = self.client.create_oversea_order(
+                side="buy",
                 symbol=symbol,
-                exchange=excd,
+                price=0,
                 quantity=quantity,
+                order_type="00",
             )
 
             success = response.get("rt_cd") == "0"
@@ -239,11 +259,12 @@ class USMarketClient:
             logger.warning("us_live_sell_attempt", symbol=symbol, quantity=quantity)
 
         try:
-            excd = self._get_exchange_code(exchange)
-            response = self.client.create_overseas_market_sell_order(
+            response = self.client.create_oversea_order(
+                side="sell",
                 symbol=symbol,
-                exchange=excd,
+                price=0,
                 quantity=quantity,
+                order_type="00",
             )
 
             success = response.get("rt_cd") == "0"
@@ -267,12 +288,11 @@ class USMarketClient:
             logger.error("us_sell_order_error", symbol=symbol, error=str(e))
             raise KISAPIError(f"Failed to place US sell order for {symbol}: {e}") from e
 
-    async def cancel_order(self, order_id: str, exchange: str = "NASDAQ") -> USOrderResult:
+    async def cancel_order(self, order_id: str, org_no: str = "", exchange: str = "NASDAQ") -> USOrderResult:
         try:
-            excd = self._get_exchange_code(exchange)
-            response = self.client.cancel_overseas_order(
+            response = self.client.cancel_order(
+                org_no=org_no,
                 order_no=order_id,
-                exchange=excd,
                 quantity=0,
                 total=True,
             )

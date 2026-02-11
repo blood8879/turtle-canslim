@@ -960,9 +960,12 @@ class TurtleCANSLIMApp(App):
             from src.signals.atr import ATRCalculator
 
             if self._settings.has_kis_credentials:
-                broker = LiveBroker(self._settings)
+                from typing import cast
+                from src.execution.live_broker import MarketType
+                broker = LiveBroker(self._settings, market=cast(MarketType, target_market))
+                market_suffix = "US" if target_market == "us" else "KRX"
                 broker_label = (
-                    "KIS 모의투자 API" if self._settings.is_paper_mode else "KIS 실거래 API"
+                    f"KIS 모의투자 API ({market_suffix})" if self._settings.is_paper_mode else f"KIS 실거래 API ({market_suffix})"
                 )
             else:
                 broker = PaperBroker(initial_cash=Decimal("100000000"))
@@ -1032,7 +1035,24 @@ class TurtleCANSLIMApp(App):
                             position_repo=position_repo,
                         )
 
-                        exit_signals = await signal_engine.check_exit_signals()
+                        async def fetch_realtime_prices(stock_ids: list[int]) -> dict[int, Decimal]:
+                            prices: dict[int, Decimal] = {}
+                            for sid in stock_ids:
+                                try:
+                                    stock = await stock_repo.get_by_id(sid)
+                                    if stock:
+                                        price = await broker.get_current_price(stock.symbol)
+                                        if price and price > 0:
+                                            prices[sid] = price
+                                except Exception:
+                                    pass
+                            return prices
+
+                        open_positions = await position_repo.get_open_positions()
+                        position_stock_ids = [p.stock_id for p in open_positions]
+                        position_prices = await fetch_realtime_prices(position_stock_ids) if position_stock_ids else {}
+
+                        exit_signals = await signal_engine.check_exit_signals(realtime_prices=position_prices)
                         self.log_message(
                             f"[bold]{market_label} 청산 시그널: {len(exit_signals)}개[/]"
                         )
@@ -1052,7 +1072,7 @@ class TurtleCANSLIMApp(App):
                             else:
                                 self.log_message(f"    [red]✗ 실패[/] {result.message}")
 
-                        pyramid_signals = await signal_engine.check_pyramid_signals()
+                        pyramid_signals = await signal_engine.check_pyramid_signals(realtime_prices=position_prices)
                         self.log_message(
                             f"[bold]{market_label} 피라미딩 시그널: {len(pyramid_signals)}개[/]"
                         )
@@ -1079,7 +1099,8 @@ class TurtleCANSLIMApp(App):
                             f"[bold]{market_label} CANSLIM 후보: {len(candidate_ids)}개[/]"
                         )
 
-                        entry_signals = await signal_engine.check_entry_signals(candidate_ids)
+                        candidate_prices = await fetch_realtime_prices(candidate_ids) if candidate_ids else {}
+                        entry_signals = await signal_engine.check_entry_signals_realtime(candidate_ids, candidate_prices)
                         self.log_message(
                             f"[bold]{market_label} 진입 시그널: {len(entry_signals)}개[/]"
                         )
@@ -1117,7 +1138,7 @@ class TurtleCANSLIMApp(App):
                             highs = [p.high for p in prices]
                             lows = [p.low for p in prices]
                             closes = [p.close for p in prices]
-                            current_close = closes[-1]
+                            current_close = candidate_prices.get(cid, closes[-1])
                             atr_result = atr_calc.calculate(highs, lows, closes)
                             if not atr_result:
                                 continue
