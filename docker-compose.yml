@@ -145,6 +145,10 @@ services:
       SEC_USER_AGENT: ${SEC_USER_AGENT:-TurtleCANSLIM contact@example.com}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # Terminal/locale settings for proper character width calculation
+      TERM: xterm-256color
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
     volumes:
       - ./logs:/app/logs
       - ./config:/app/config:ro

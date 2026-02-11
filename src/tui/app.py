@@ -414,21 +414,21 @@ class TurtleCANSLIMApp(App):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "종료"),
-        Binding("r", "refresh", "새로고침"),
-        Binding("u", "update_data", "데이터갱신"),
-        Binding("s", "run_screening_default", "스크리닝"),
-        Binding("k", "run_screening_krx", "KRX스크리닝"),
-        Binding("n", "run_screening_us", "US스크리닝"),
-        Binding("t", "toggle_trading_krx", "KRX트레이딩"),
-        Binding("y", "toggle_trading_us", "US트레이딩"),
-        Binding("m", "toggle_trading_mode", "모의/실전"),
-        Binding("d", "toggle_dark", "다크/라이트"),
-        Binding("1", "show_tab('portfolio')", "포트폴리오", show=False),
-        Binding("2", "show_tab('candidates')", "후보종목", show=False),
-        Binding("3", "show_tab('signals')", "시그널", show=False),
-        Binding("4", "show_tab('settings')", "설정", show=False),
-        Binding("5", "show_tab('shortcuts')", "단축키", show=False),
+        Binding("q", "quit", "Quit"),
+        Binding("r", "refresh", "Refresh"),
+        Binding("u", "update_data", "Update"),
+        Binding("s", "run_screening_default", "Screen"),
+        Binding("k", "run_screening_krx", "KRX"),
+        Binding("n", "run_screening_us", "US"),
+        Binding("t", "toggle_trading_krx", "KRX Trade"),
+        Binding("y", "toggle_trading_us", "US Trade"),
+        Binding("m", "toggle_trading_mode", "Mode"),
+        Binding("d", "toggle_dark", "Dark/Light"),
+        Binding("1", "show_tab('portfolio')", "Portfolio", show=False),
+        Binding("2", "show_tab('candidates')", "Candidates", show=False),
+        Binding("3", "show_tab('signals')", "Signals", show=False),
+        Binding("4", "show_tab('settings')", "Settings", show=False),
+        Binding("5", "show_tab('shortcuts')", "Shortcuts", show=False),
     ]
 
     def __init__(self) -> None:
@@ -446,25 +446,25 @@ class TurtleCANSLIMApp(App):
         yield StatusPanel(id="status-panel")
         with Container(id="main-content"):
             with TabbedContent():
-                with TabPane("포트폴리오", id="portfolio"):
+                with TabPane("Portfolio", id="portfolio"):
                     yield PortfolioTable()
-                with TabPane("후보종목", id="candidates"):
+                with TabPane("Candidates", id="candidates"):
                     yield CandidatesTable()
-                with TabPane("시그널", id="signals"):
+                with TabPane("Signals", id="signals"):
                     yield SignalsTable()
-                with TabPane("설정", id="settings"):
+                with TabPane("Settings", id="settings"):
                     with ScrollableContainer():
                         yield SettingsPanel()
-                with TabPane("단축키", id="shortcuts"):
+                with TabPane("Shortcuts", id="shortcuts"):
                     with ScrollableContainer():
                         yield KeyboardShortcutsPanel()
         with Horizontal(id="action-buttons"):
-            yield Button("새로고침 [R]", id="btn-refresh", variant="default")
-            yield Button("KRX스크리닝 [K]", id="btn-screen-krx", variant="primary")
-            yield Button("US스크리닝 [N]", id="btn-screen-us", variant="primary")
-            yield Button("전체스크리닝 [S]", id="btn-screen", variant="primary")
-            yield Button("KRX트레이딩 [T]", id="btn-trade-krx", variant="warning")
-            yield Button("US트레이딩 [Y]", id="btn-trade-us", variant="warning")
+            yield Button("Refresh [R]", id="btn-refresh", variant="default")
+            yield Button("KRX Screen [K]", id="btn-screen-krx", variant="primary")
+            yield Button("US Screen [N]", id="btn-screen-us", variant="primary")
+            yield Button("All Screen [S]", id="btn-screen", variant="primary")
+            yield Button("KRX Trade [T]", id="btn-trade-krx", variant="warning")
+            yield Button("US Trade [Y]", id="btn-trade-us", variant="warning")
         yield Static(id="progress-status", classes="progress-hidden")
         yield ProgressBar(id="progress-bar", total=100, show_eta=False, classes="progress-hidden")
         yield RichLog(id="log-panel", highlight=True, markup=True)
@@ -864,15 +864,15 @@ class TurtleCANSLIMApp(App):
             self._trading_active_krx = True
             btn_id, btn_label_stop, btn_label_start = (
                 "#btn-trade-krx",
-                "KRX중지 [T]",
-                "KRX트레이딩 [T]",
+                "KRX Stop [T]",
+                "KRX Trade [T]",
             )
         else:
             self._trading_active_us = True
             btn_id, btn_label_stop, btn_label_start = (
                 "#btn-trade-us",
-                "US중지 [Y]",
-                "US트레이딩 [Y]",
+                "US Stop [Y]",
+                "US Trade [Y]",
             )
 
         trade_btn = self.query_one(btn_id, Button)
