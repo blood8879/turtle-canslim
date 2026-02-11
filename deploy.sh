@@ -9,4 +9,4 @@ docker compose up -d
 
 echo ""
 echo "=== Deploy Complete ==="
-echo "TUI: docker compose --profile tui run --rm tui"
+echo "TUI: ./run_tui.sh"
