@@ -451,6 +451,24 @@ class PositionRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
+    async def get_closed_positions(self, limit: int | None = None) -> Sequence[Position]:
+        stmt = (
+            select(Position)
+            .where(Position.status == PositionStatus.CLOSED.value)
+            .order_by(desc(Position.exit_date))
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    async def get_all_positions(self, limit: int | None = None) -> Sequence[Position]:
+        stmt = select(Position).order_by(desc(Position.entry_date))
+        if limit:
+            stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
     async def get_by_stock(self, stock_id: int, open_only: bool = True) -> Position | None:
         stmt = select(Position).where(Position.stock_id == stock_id)
         if open_only:

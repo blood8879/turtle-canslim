@@ -14,6 +14,7 @@ from src.risk.unit_limits import UnitLimitManager
 from src.signals.turtle import TurtleSignal
 
 if TYPE_CHECKING:
+    from src.core.trade_journal import TradeJournal
     from src.data.repositories import OrderRepository, PositionRepository
     from src.execution.broker_interface import BrokerInterface
 
@@ -30,6 +31,14 @@ class ExecutionResult:
     quantity: int
     filled_price: Decimal | None
     message: str
+    # Exit-specific metadata (populated only on successful exits)
+    entry_price: Decimal | None = None
+    pnl: Decimal | None = None
+    pnl_percent: Decimal | None = None
+    holding_days: int | None = None
+    win_rate: Decimal | None = None
+    total_trades: int | None = None
+    stock_name: str | None = None
 
 
 class OrderManager:
@@ -41,6 +50,9 @@ class OrderManager:
         order_repo: OrderRepository,
         position_repo: PositionRepository,
         settings: Settings | None = None,
+        trade_journal: TradeJournal | None = None,
+        stock_name: str = "",
+        stock_market: str = "",
     ):
         self._broker = broker
         self._position_sizer = position_sizer
@@ -50,6 +62,9 @@ class OrderManager:
         self._settings = settings or get_settings()
         self._max_entry_slippage = Decimal(str(self._settings.risk.max_entry_slippage_pct))
         self._max_exit_slippage = Decimal(str(self._settings.risk.max_exit_slippage_pct))
+        self._journal = trade_journal
+        self._stock_name = stock_name
+        self._stock_market = stock_market
 
     def _check_entry_slippage(self, signal: TurtleSignal) -> tuple[bool, str]:
         if signal.breakout_level is None or signal.breakout_level <= 0:
@@ -227,6 +242,23 @@ class OrderManager:
                     position_id=position.id,
                 )
 
+                if self._journal:
+                    risk_pct = (effective_stop - filled_price) / filled_price if filled_price > 0 else None
+                    self._journal.log_entry(
+                        timestamp=datetime.now(),
+                        symbol=signal.symbol,
+                        name=signal.name or self._stock_name,
+                        market=self._stock_market,
+                        system=signal.system,
+                        entry_price=filled_price,
+                        breakout_level=signal.breakout_level,
+                        quantity=position_result.quantity,
+                        position_value=filled_price * position_result.quantity,
+                        stop_loss=effective_stop,
+                        stop_loss_type=position_result.stop_loss_type,
+                        risk_pct=risk_pct,
+                    )
+
                 return ExecutionResult(
                     success=True,
                     order_id=response.order_id,
@@ -336,6 +368,28 @@ class OrderManager:
                     reason=signal.signal_type,
                 )
 
+                now = datetime.now()
+                holding_days = max((now - position.entry_date).days, 1)
+                closed = await self._position_repo.get_closed_positions()
+                from src.execution.performance import PerformanceTracker
+                stats = PerformanceTracker.calculate(closed)
+
+                if self._journal:
+                    self._journal.log_exit(
+                        timestamp=now,
+                        symbol=signal.symbol,
+                        name=signal.name or self._stock_name,
+                        market=self._stock_market,
+                        exit_reason=signal.signal_type,
+                        entry_price=position.entry_price,
+                        exit_price=filled_price,
+                        quantity=position.quantity,
+                        pnl=pnl,
+                        pnl_percent=pnl_pct,
+                        holding_days=holding_days,
+                        stats=stats,
+                    )
+
                 return ExecutionResult(
                     success=True,
                     order_id=response.order_id,
@@ -344,6 +398,13 @@ class OrderManager:
                     quantity=position.quantity,
                     filled_price=filled_price,
                     message=f"Exit order executed ({signal.signal_type})",
+                    entry_price=position.entry_price,
+                    pnl=pnl,
+                    pnl_percent=pnl_pct,
+                    holding_days=holding_days,
+                    win_rate=stats.win_rate if stats.total_trades > 0 else None,
+                    total_trades=stats.total_trades,
+                    stock_name=signal.name or self._stock_name,
                 )
             else:
                 await self._order_repo.update_status(
@@ -468,6 +529,18 @@ class OrderManager:
                     filled_price=float(filled_price),
                     new_units=position.units + 1,
                 )
+
+                if self._journal:
+                    self._journal.log_pyramid(
+                        timestamp=datetime.now(),
+                        symbol=signal.symbol,
+                        name=signal.name or self._stock_name,
+                        market=self._stock_market,
+                        price=filled_price,
+                        additional_qty=position_result.quantity,
+                        new_units=position.units + 1,
+                        avg_entry_price=position.entry_price,
+                    )
 
                 return ExecutionResult(
                     success=True,

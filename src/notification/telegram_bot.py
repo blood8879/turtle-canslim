@@ -37,6 +37,21 @@ class OrderNotification:
 
 
 @dataclass
+class ExitNotification:
+    symbol: str
+    name: str
+    exit_reason: str
+    entry_price: Decimal
+    exit_price: Decimal
+    quantity: int
+    pnl: Decimal
+    pnl_percent: Decimal
+    holding_days: int
+    win_rate: Decimal | None = None
+    total_trades: int | None = None
+
+
+@dataclass
 class DailyReport:
     date: str
     total_value: Decimal
@@ -46,6 +61,12 @@ class DailyReport:
     total_units: int
     signals_generated: int
     orders_executed: int
+    win_rate: Decimal | None = None
+    total_closed_trades: int | None = None
+    win_count: int | None = None
+    loss_count: int | None = None
+    avg_holding_days: float | None = None
+    profit_factor: Decimal | None = None
 
 
 class TelegramNotifier:
@@ -143,25 +164,58 @@ class TelegramNotifier:
 
         return await self.notify_order(order)
 
+    async def notify_exit(self, exit_info: ExitNotification) -> bool:
+        if not self._settings.notification.notify_on_order:
+            return False
+
+        pnl_emoji = "💰" if exit_info.pnl >= 0 else "💸"
+        sign = "+" if exit_info.pnl >= 0 else ""
+
+        message = (
+            f"{pnl_emoji} <b>포지션 청산</b>\n\n"
+            f"<b>종목:</b> {exit_info.symbol} ({exit_info.name})\n"
+            f"<b>사유:</b> {exit_info.exit_reason}\n"
+            f"<b>진입:</b> {exit_info.entry_price:,.2f} → <b>청산:</b> {exit_info.exit_price:,.2f}\n"
+            f"<b>수량:</b> {exit_info.quantity:,}\n"
+            f"<b>손익:</b> {sign}{exit_info.pnl:,.0f} ({exit_info.pnl_percent:+.2%})\n"
+            f"<b>보유기간:</b> {exit_info.holding_days}일"
+        )
+
+        if exit_info.win_rate is not None and exit_info.total_trades is not None:
+            message += f"\n\n📊 <b>누적 승률:</b> {exit_info.win_rate:.1%} ({exit_info.total_trades}건)"
+
+        return await self.send_message(message.strip())
+
     async def send_daily_report(self, report: DailyReport) -> bool:
         if not self._settings.notification.daily_report:
             return False
 
         pnl_emoji = "📈" if report.daily_pnl >= 0 else "📉"
 
-        message = f"""
-📊 <b>Daily Report - {report.date}</b>
+        message = (
+            f"📊 <b>Daily Report - {report.date}</b>\n\n"
+            f"{pnl_emoji} <b>Daily P&L:</b> {report.daily_pnl:+,.0f} ({report.daily_pnl_pct:+.2%})\n\n"
+            f"<b>Portfolio Value:</b> {report.total_value:,.0f}\n"
+            f"<b>Open Positions:</b> {report.open_positions}\n"
+            f"<b>Total Units:</b> {report.total_units}/20\n\n"
+            f"<b>Today's Activity:</b>\n"
+            f"- Signals: {report.signals_generated}\n"
+            f"- Orders: {report.orders_executed}"
+        )
 
-{pnl_emoji} <b>Daily P&L:</b> {report.daily_pnl:+,.0f} ({report.daily_pnl_pct:+.2%})
+        if report.win_rate is not None and report.total_closed_trades:
+            win = report.win_count or 0
+            loss = report.loss_count or 0
+            message += (
+                f"\n\n📈 <b>전체 성과</b>\n"
+                f"- 총 거래: {report.total_closed_trades}건\n"
+                f"- 승률: {report.win_rate:.1%} ({win}승 {loss}패)"
+            )
+            if report.avg_holding_days is not None:
+                message += f"\n- 평균 보유: {report.avg_holding_days:.1f}일"
+            if report.profit_factor is not None and report.profit_factor > 0:
+                message += f"\n- 손익비: {report.profit_factor:.2f}"
 
-<b>Portfolio Value:</b> {report.total_value:,.0f}
-<b>Open Positions:</b> {report.open_positions}
-<b>Total Units:</b> {report.total_units}/20
-
-<b>Today's Activity:</b>
-- Signals Generated: {report.signals_generated}
-- Orders Executed: {report.orders_executed}
-"""
         return await self.send_message(message.strip())
 
     async def notify_stop_loss_triggered(

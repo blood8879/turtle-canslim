@@ -244,13 +244,14 @@ class KeyboardShortcutsPanel(Static):
 [bold yellow]N[/]    US 스크리닝
 [bold yellow]T[/]    KRX 트레이딩 시작/중지
 [bold yellow]Y[/]    US 트레이딩 시작/중지
+[bold yellow]H[/]    매매 내역 새로고침
 [bold yellow]M[/]    모의/실전 모드 전환
 [bold yellow]D[/]    다크/라이트 모드 전환
 
 [bold cyan]═══ 탭 전환 ═══[/]
 
 [bold yellow]←/→[/]  이전/다음 탭 전환
-[bold yellow]1-6[/]  탭 직접 선택 (Portfolio/Candidates/Signals/Log/Settings/Shortcuts)
+[bold yellow]1-7[/]  탭 직접 선택 (Portfolio/Candidates/Signals/매매내역/Log/Settings/Shortcuts)
 
 [bold cyan]═══ 테이블 내 이동 ═══[/]
 
@@ -264,6 +265,45 @@ class KeyboardShortcutsPanel(Static):
 • 로그는 logs/ 디렉토리에 자동 저장됨
 """
         content.update(text)
+
+
+class TradeHistoryTable(Static):
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="trade-stats-panel")
+        yield DataTable(id="trade-history-table")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#trade-history-table", DataTable)
+        table.add_columns(
+            "종목코드", "종목명", "매수일", "매도일", "매수가", "매도가", "손익%", "보유일", "청산사유"
+        )
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+    def update_stats(self, stats_text: str) -> None:
+        panel = self.query_one("#trade-stats-panel", Static)
+        panel.update(stats_text)
+
+    def update_data(self, trades: list[dict]) -> None:
+        table = self.query_one("#trade-history-table", DataTable)
+        table.clear()
+
+        for t in trades:
+            pnl_pct = t.get("pnl_pct", 0)
+            pnl_color = "green" if pnl_pct >= 0 else "red"
+
+            table.add_row(
+                t.get("symbol", ""),
+                _truncate_wide(t.get("name", ""), 12),
+                t.get("entry_date", ""),
+                t.get("exit_date", ""),
+                f"{t.get('entry_price', 0):,.0f}",
+                f"{t.get('exit_price', 0):,.0f}",
+                Text(f"{pnl_pct:+.2f}%", style=pnl_color),
+                str(t.get("holding_days", 0)),
+                t.get("exit_reason", ""),
+            )
 
 
 class SettingsPanel(Static):
@@ -404,7 +444,7 @@ class TurtleCANSLIMApp(App):
     }
     """
 
-    _TAB_IDS = ["portfolio", "candidates", "signals", "log", "settings", "shortcuts"]
+    _TAB_IDS = ["portfolio", "candidates", "signals", "trade-history", "log", "settings", "shortcuts"]
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -415,6 +455,7 @@ class TurtleCANSLIMApp(App):
         Binding("n", "run_screening_us", "US"),
         Binding("t", "toggle_trading_krx", "KRX Trade"),
         Binding("y", "toggle_trading_us", "US Trade"),
+        Binding("h", "refresh_trade_history", "Trade History"),
         Binding("m", "toggle_trading_mode", "Mode"),
         Binding("d", "toggle_dark", "Dark/Light"),
         Binding("left", "prev_tab", "Prev Tab"),
@@ -422,9 +463,10 @@ class TurtleCANSLIMApp(App):
         Binding("1", "show_tab('portfolio')", "Portfolio", show=False),
         Binding("2", "show_tab('candidates')", "Candidates", show=False),
         Binding("3", "show_tab('signals')", "Signals", show=False),
-        Binding("4", "show_tab('log')", "Log", show=False),
-        Binding("5", "show_tab('settings')", "Settings", show=False),
-        Binding("6", "show_tab('shortcuts')", "Shortcuts", show=False),
+        Binding("4", "show_tab('trade-history')", "Trade History", show=False),
+        Binding("5", "show_tab('log')", "Log", show=False),
+        Binding("6", "show_tab('settings')", "Settings", show=False),
+        Binding("7", "show_tab('shortcuts')", "Shortcuts", show=False),
     ]
 
     def __init__(self) -> None:
@@ -460,6 +502,8 @@ class TurtleCANSLIMApp(App):
                     yield CandidatesTable()
                 with TabPane("Signals", id="signals"):
                     yield SignalsTable()
+                with TabPane("매매 내역", id="trade-history"):
+                    yield TradeHistoryTable(id="trade-history-tab")
                 with TabPane("Log", id="log"):
                     yield RichLog(id="log-tab-panel", highlight=True, markup=True)
                 with TabPane("Settings", id="settings"):
@@ -791,6 +835,79 @@ class TurtleCANSLIMApp(App):
             trading_us=self._trading_active_us,
         )
 
+    @work(exclusive=False)
+    async def action_refresh_trade_history(self) -> None:
+        self.log_message("[yellow]매매 내역 조회 중...[/]")
+        try:
+            from src.core.database import get_db_manager
+            from src.data.repositories import PositionRepository, StockRepository
+            from src.execution.performance import PerformanceTracker
+
+            db = get_db_manager()
+            async with db.session() as session:
+                position_repo = PositionRepository(session)
+                stock_repo = StockRepository(session)
+
+                closed_positions = await position_repo.get_closed_positions(limit=50)
+                open_positions = await position_repo.get_open_positions()
+                stats = PerformanceTracker.calculate(closed_positions, open_positions)
+
+                stats_text = (
+                    f"[bold cyan]──── 전체 성과 ────[/]\n"
+                    f"[bold]총 거래:[/] {stats.total_trades}건  "
+                    f"[bold]승률:[/] {stats.win_rate:.1%} ({stats.win_count}승 {stats.loss_count}패)  "
+                )
+                if stats.win_count > 0:
+                    stats_text += (
+                        f"[bold]평균 수익:[/] [green]{stats.avg_win_pct:+.2%}[/]  "
+                        f"[bold]최대 수익:[/] [green]{stats.max_win_pct:+.2%}[/]\n"
+                    )
+                if stats.loss_count > 0:
+                    stats_text += (
+                        f"[bold]평균 손실:[/] [red]{stats.avg_loss_pct:+.2%}[/]  "
+                        f"[bold]최대 손실:[/] [red]{stats.max_loss_pct:+.2%}[/]  "
+                    )
+                if stats.avg_holding_days > 0:
+                    stats_text += (
+                        f"[bold]평균 보유:[/] {stats.avg_holding_days:.1f}일  "
+                        f"[bold]최장:[/] {stats.max_holding_days}일  "
+                    )
+                if stats.profit_factor > 0:
+                    stats_text += f"[bold]손익비:[/] {stats.profit_factor:.2f}  "
+                if stats.open_positions > 0:
+                    stats_text += (
+                        f"\n[bold]보유 중:[/] {stats.open_positions}종목 ({stats.open_units} units)"
+                    )
+
+                trades: list[dict] = []
+                for pos in closed_positions:
+                    stock = await stock_repo.get_by_id(pos.stock_id)
+                    symbol = stock.symbol if stock else ""
+                    name = stock.name if stock else ""
+                    entry_dt = pos.entry_date.strftime("%Y-%m-%d") if pos.entry_date else ""
+                    exit_dt = pos.exit_date.strftime("%Y-%m-%d") if pos.exit_date else ""
+                    holding = (pos.exit_date - pos.entry_date).days if pos.entry_date and pos.exit_date else 0
+
+                    trades.append({
+                        "symbol": symbol,
+                        "name": name,
+                        "entry_date": entry_dt,
+                        "exit_date": exit_dt,
+                        "entry_price": float(pos.entry_price),
+                        "exit_price": float(pos.exit_price) if pos.exit_price else 0,
+                        "pnl_pct": float(pos.pnl_percent) if pos.pnl_percent else 0,
+                        "holding_days": max(holding, 0),
+                        "exit_reason": pos.exit_reason or "",
+                    })
+
+            trade_history_table = self.query_one(TradeHistoryTable)
+            trade_history_table.update_stats(stats_text)
+            trade_history_table.update_data(trades)
+            self.log_message(f"[green]매매 내역 조회 완료: {len(trades)}건[/]")
+
+        except Exception as e:
+            self.log_message(f"[red]매매 내역 조회 오류: {e}[/]")
+
     def action_run_screening_default(self) -> None:
         """전체 스크리닝 (설정된 마켓 기준)."""
         self._run_screening_for_market("both")
@@ -980,6 +1097,9 @@ class TurtleCANSLIMApp(App):
             from src.signals.turtle import TurtleSignalEngine
             from src.signals.breakout import BreakoutProximityWatcher, WatchedStock
             from src.signals.atr import ATRCalculator
+            from src.core.trade_journal import TradeJournal
+
+            trade_journal = TradeJournal()
 
             if self._settings.has_kis_credentials:
                 from typing import cast
@@ -1055,6 +1175,9 @@ class TurtleCANSLIMApp(App):
                             unit_manager=unit_manager,
                             order_repo=order_repo,
                             position_repo=position_repo,
+                            trade_journal=trade_journal,
+                            stock_name="",
+                            stock_market=target_market,
                         )
 
                         async def fetch_realtime_prices(stock_ids: list[int], batch_size: int = 20) -> dict[int, Decimal]:
@@ -1238,6 +1361,9 @@ class TurtleCANSLIMApp(App):
                                     unit_manager=poll_unit_manager,
                                     order_repo=poll_order_repo,
                                     position_repo=poll_position_repo,
+                                    trade_journal=trade_journal,
+                                    stock_name="",
+                                    stock_market=target_market,
                                 )
 
                                 for watched in proximity_watcher.get_watched_list():

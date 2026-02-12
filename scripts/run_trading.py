@@ -34,7 +34,9 @@ from src.execution.paper_broker import PaperBroker
 from src.execution.live_broker import LiveBroker
 from src.execution.order_manager import OrderManager
 from src.execution.portfolio import PortfolioManager
-from src.notification.telegram_bot import TelegramNotifier, SignalNotification, OrderNotification
+from src.core.trade_journal import TradeJournal
+from src.execution.performance import PerformanceTracker
+from src.notification.telegram_bot import TelegramNotifier, SignalNotification, OrderNotification, ExitNotification
 
 logger = get_logger(__name__)
 tlog = get_trading_logger()
@@ -60,6 +62,7 @@ class TradingBot:
             self._brokers[market] = self._broker
 
         self._proximity_watcher = BreakoutProximityWatcher(self._settings.turtle)
+        self._journal = TradeJournal()
 
     def _create_broker(self, market: str) -> LiveBroker | PaperBroker:
         from src.execution.live_broker import MarketType
@@ -228,6 +231,9 @@ class TradingBot:
                     unit_manager=unit_manager,
                     order_repo=order_repo,
                     position_repo=position_repo,
+                    trade_journal=self._journal,
+                    stock_name=stock.name if stock else "",
+                    stock_market=stock.market if stock else "",
                 )
 
             open_positions = await position_repo.get_open_positions()
@@ -296,6 +302,22 @@ class TradingBot:
                                 message=result.message,
                             )
                         )
+                        if result.entry_price is not None:
+                            await self._notifier.notify_exit(
+                                ExitNotification(
+                                    symbol=sig.symbol,
+                                    name=result.stock_name or sig.symbol,
+                                    exit_reason=sig.signal_type,
+                                    entry_price=result.entry_price,
+                                    exit_price=result.filled_price or sig.price,
+                                    quantity=result.quantity,
+                                    pnl=result.pnl or Decimal("0"),
+                                    pnl_percent=result.pnl_percent or Decimal("0"),
+                                    holding_days=result.holding_days or 0,
+                                    win_rate=result.win_rate,
+                                    total_trades=result.total_trades,
+                                )
+                            )
 
             pyramid_signals = await signal_engine.check_pyramid_signals(
                 realtime_prices=realtime_prices,
@@ -481,6 +503,9 @@ class TradingBot:
                     unit_manager=unit_manager,
                     order_repo=order_repo,
                     position_repo=position_repo,
+                    trade_journal=self._journal,
+                    stock_name=stock.name if stock else "",
+                    stock_market=stock.market if stock else "",
                 )
 
             exit_signals = await signal_engine.check_exit_signals()
@@ -512,6 +537,22 @@ class TradingBot:
                                 message=result.message,
                             )
                         )
+                        if result.entry_price is not None:
+                            await self._notifier.notify_exit(
+                                ExitNotification(
+                                    symbol=sig.symbol,
+                                    name=result.stock_name or sig.symbol,
+                                    exit_reason=sig.signal_type,
+                                    entry_price=result.entry_price,
+                                    exit_price=result.filled_price or sig.price,
+                                    quantity=result.quantity,
+                                    pnl=result.pnl or Decimal("0"),
+                                    pnl_percent=result.pnl_percent or Decimal("0"),
+                                    holding_days=result.holding_days or 0,
+                                    win_rate=result.win_rate,
+                                    total_trades=result.total_trades,
+                                )
+                            )
 
             pyramid_signals = await signal_engine.check_pyramid_signals()
             for sig in pyramid_signals:
@@ -610,6 +651,9 @@ class TradingBot:
                             unit_manager=unit_manager,
                             order_repo=order_repo,
                             position_repo=position_repo,
+                            trade_journal=self._journal,
+                            stock_name=stock.name if stock else watched.name,
+                            stock_market=stock.market if stock else "",
                         )
                         price = await broker.get_current_price(watched.symbol)
                         if price <= 0:
@@ -751,6 +795,12 @@ class TradingBot:
                 else Decimal("0")
             )
 
+            closed_positions = await position_repo.get_closed_positions()
+            open_pos = await position_repo.get_open_positions()
+            perf_stats = PerformanceTracker.calculate(closed_positions, open_pos)
+
+            self._journal.log_daily_summary(perf_stats)
+
             if self._notifier.is_enabled:
                 from src.notification.telegram_bot import DailyReport
 
@@ -764,6 +814,12 @@ class TradingBot:
                         total_units=total_units,
                         signals_generated=0,
                         orders_executed=0,
+                        win_rate=perf_stats.win_rate,
+                        total_closed_trades=perf_stats.total_trades,
+                        win_count=perf_stats.win_count,
+                        loss_count=perf_stats.loss_count,
+                        avg_holding_days=perf_stats.avg_holding_days,
+                        profit_factor=perf_stats.profit_factor,
                     )
                 )
 
