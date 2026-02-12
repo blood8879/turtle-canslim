@@ -28,6 +28,7 @@ class CANSLIMConfig(BaseModel):
     a_min_years: int = Field(default=2, ge=1, le=10)
     l_rs_min: int = Field(default=80, ge=1, le=99)
     i_institution_min: float = Field(default=0.10, ge=0, le=1)
+    min_roe: float = Field(default=0.12, ge=0, le=1)
 
 
 class TurtleConfig(BaseModel):

@@ -49,7 +49,7 @@ class CANSLIMScreener:
         self._l_criteria = LLeader(config.l_rs_min)
         self._i_criteria = IInstitution(config)
         self._m_criteria = MMarket()
-        self._scorer = CANSLIMScorer()
+        self._scorer = CANSLIMScorer(min_roe=config.min_roe)
 
         self._market_result = None
 

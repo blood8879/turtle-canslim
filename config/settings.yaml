@@ -9,6 +9,7 @@ canslim:
   a_min_years: 3
   l_rs_min: 80
   i_institution_min: 0.10
+  min_roe: 0.12
 
 turtle:
   system1_entry_period: 20

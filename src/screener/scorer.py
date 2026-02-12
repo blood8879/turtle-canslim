@@ -54,8 +54,13 @@ class CANSLIMScoreResult:
 
 
 class CANSLIMScorer:
-    def __init__(self, min_score_for_candidate: int = 4):
+    def __init__(
+        self,
+        min_score_for_candidate: int = 4,
+        min_roe: float = 0.12,
+    ):
         self.min_score = min_score_for_candidate
+        self.min_roe = Decimal(str(min_roe))
 
     def calculate_score(
         self,
@@ -87,7 +92,18 @@ class CANSLIMScorer:
 
         core_criteria_met = c_passed and l_passed and m_passed
 
-        is_candidate = total_score >= self.min_score and core_criteria_met
+        roe = a_result.roe if a_result else None
+        roe_met = roe is not None and roe >= self.min_roe
+
+        current_revenue = c_result.current_revenue if c_result else None
+        revenue_positive = current_revenue is not None and current_revenue > 0
+
+        is_candidate = (
+            total_score >= self.min_score
+            and core_criteria_met
+            and roe_met
+            and revenue_positive
+        )
 
         return CANSLIMScoreResult(
             symbol=symbol,
