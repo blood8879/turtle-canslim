@@ -202,6 +202,7 @@ class WatchedStock:
     closes: list[Decimal]
     atr_n: Decimal
     previous_s1_winner: bool = True
+    last_price: Decimal = Decimal("0")
 
 
 class BreakoutProximityWatcher:
@@ -284,6 +285,11 @@ class BreakoutProximityWatcher:
             self.unregister(stock_id)
 
         return None
+
+    def update_price(self, stock_id: int, price: Decimal) -> None:
+        watched = self._watched.get(stock_id)
+        if watched:
+            watched.last_price = price
 
     def get_watched_list(self) -> list[WatchedStock]:
         return list(self._watched.values())

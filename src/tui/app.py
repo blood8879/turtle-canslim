@@ -990,15 +990,20 @@ class TurtleCANSLIMApp(App):
                 s1_dist = None
                 s2_level = None
                 s2_dist = None
-                for target in watched.targets:
-                    if target.system == 1:
-                        s1_level = float(target.breakout_level)
-                        s1_dist = float(target.distance_pct) * 100
-                    elif target.system == 2:
-                        s2_level = float(target.breakout_level)
-                        s2_dist = float(target.distance_pct) * 100
 
-                current_price = float(watched.closes[-1]) if watched.closes else 0
+                current_price = float(watched.last_price) if watched.last_price else (
+                    float(watched.closes[-1]) if watched.closes else 0
+                )
+
+                for target in watched.targets:
+                    level = float(target.breakout_level)
+                    dist = ((level - current_price) / current_price * 100) if current_price > 0 else 0
+                    if target.system == 1:
+                        s1_level = level
+                        s1_dist = dist
+                    elif target.system == 2:
+                        s2_level = level
+                        s2_dist = dist
 
                 items.append({
                     "symbol": watched.symbol,

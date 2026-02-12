@@ -499,6 +499,7 @@ class TradingBot:
                             lows=lows,
                             closes=closes,
                             atr_n=atr_result.atr,
+                            last_price=current_close,
                         )
                     )
 
@@ -718,6 +719,7 @@ class TradingBot:
                         if price <= 0:
                             continue
 
+                        self._proximity_watcher.update_price(watched.stock_id, price)
                         breakout = self._proximity_watcher.check_breakout(watched.stock_id, price)
                         if breakout and breakout.is_entry:
                             signal = TurtleSignal(
