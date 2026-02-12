@@ -464,7 +464,8 @@ class TradingBot:
                             )
                         )
 
-            self._proximity_watcher.clear()
+            current_watched_ids = {w.stock_id for w in self._proximity_watcher.get_watched_list()}
+            new_watched_ids: set[int] = set()
             atr_calc = ATRCalculator(self._settings.turtle)
             for cid in candidate_ids:
                 existing_pos = await position_repo.get_by_stock(cid, open_only=True)
@@ -477,31 +478,42 @@ class TradingBot:
                 lows = [p.low for p in prices]
                 closes = [p.close for p in prices]
                 current_close = realtime_prices.get(cid, closes[-1])
-                atr_result = atr_calc.calculate(highs, lows, closes)
+                rt_highs = highs + [current_close]
+                rt_lows = lows + [current_close]
+                rt_closes = closes + [current_close]
+                atr_result = atr_calc.calculate(rt_highs, rt_lows, rt_closes)
                 if not atr_result:
                     continue
+                previous_s1_winner = await signal_engine._load_previous_s1_winner(cid)
                 targets = signal_engine._breakout.check_proximity(
                     current_close,
-                    highs,
+                    rt_highs,
                     Decimal(str(self._settings.turtle.breakout_proximity_pct)),
+                    previous_s1_winner,
                 )
                 if targets:
                     stock_info = await signal_engine._get_stock_info(cid)
                     symbol = stock_info["symbol"] if stock_info else str(cid)
                     name = stock_info["name"] if stock_info else ""
+                    new_watched_ids.add(cid)
                     self._proximity_watcher.register(
                         WatchedStock(
                             stock_id=cid,
                             symbol=symbol,
                             name=name,
                             targets=targets,
-                            highs=highs,
-                            lows=lows,
-                            closes=closes,
+                            highs=rt_highs,
+                            lows=rt_lows,
+                            closes=rt_closes,
                             atr_n=atr_result.atr,
+                            previous_s1_winner=previous_s1_winner,
                             last_price=current_close,
                         )
                     )
+
+            stale_ids = current_watched_ids - new_watched_ids
+            for stale_id in stale_ids:
+                self._proximity_watcher.unregister(stale_id)
 
             if self._proximity_watcher.has_targets:
                 tlog.info(

@@ -200,3 +200,71 @@ class TestPyramidManager:
         avg = self.pyramid.get_average_entry_price(entries)
 
         assert avg == Decimal("50500")
+
+
+class TestBreakoutRealtimeSlice:
+    def setup_method(self) -> None:
+        self.config = TurtleConfig()
+        self.detector = BreakoutDetector(self.config)
+
+    def test_entry_with_realtime_appended(self) -> None:
+        highs = [Decimal(str(50000 + i * 50)) for i in range(25)]
+        realtime_price = Decimal("60000")
+        highs_with_rt = highs + [realtime_price]
+
+        result = self.detector.check_entry(realtime_price, highs_with_rt, previous_s1_winner=False)
+
+        assert result.is_entry is True
+
+    def test_entry_correct_window_with_appended_price(self) -> None:
+        highs = [Decimal(str(50000 + i * 50)) for i in range(25)]
+        s1_high_correct = max(highs[-20:])
+        current_price = s1_high_correct + Decimal("1")
+
+        result = self.detector.check_entry(
+            current_price, highs + [current_price], previous_s1_winner=False,
+        )
+        assert result.is_entry is True
+
+    def test_proximity_with_realtime_appended(self) -> None:
+        highs = [Decimal("50000")] * 25
+        realtime_price = Decimal("49800")
+        highs_with_rt = highs + [realtime_price]
+
+        targets = self.detector.check_proximity(
+            realtime_price,
+            highs_with_rt,
+            Decimal("0.05"),
+            previous_s1_winner=False,
+        )
+
+        assert len(targets) > 0
+        assert targets[0].system in (1, 2)
+
+
+class TestPreviousS1WinnerDefault:
+    def setup_method(self) -> None:
+        self.config = TurtleConfig()
+        self.detector = BreakoutDetector(self.config)
+
+    def test_s1_allowed_when_previous_was_loss(self) -> None:
+        highs = [Decimal(str(50000 + i * 50)) for i in range(25)]
+        current_price = Decimal("60000")
+
+        result = self.detector.check_entry(current_price, highs, previous_s1_winner=False)
+        assert result.is_entry is True
+
+    def test_s1_blocked_when_previous_was_winner(self) -> None:
+        highs = [Decimal(str(50000 + i * 50)) for i in range(25)]
+        current_price = Decimal("51300")
+
+        result = self.detector.check_entry(current_price, highs, previous_s1_winner=True)
+        assert result.is_entry is False or result.system == 2
+
+    def test_s2_always_allowed_regardless_of_s1_winner(self) -> None:
+        highs = [Decimal(str(50000 + i * 30)) for i in range(60)]
+        current_price = Decimal("60000")
+
+        result = self.detector.check_entry(current_price, highs, previous_s1_winner=True)
+        assert result.is_entry is True
+        assert result.system == 2

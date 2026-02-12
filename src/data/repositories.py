@@ -503,6 +503,23 @@ class PositionRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_last_closed_s1(self, stock_id: int) -> Position | None:
+        """Get the most recently closed System 1 position for a stock."""
+        stmt = (
+            select(Position)
+            .where(
+                and_(
+                    Position.stock_id == stock_id,
+                    Position.status == PositionStatus.CLOSED.value,
+                    Position.entry_system == 1,
+                )
+            )
+            .order_by(desc(Position.exit_date))
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_total_units(self) -> int:
         stmt = select(Position).where(Position.status == PositionStatus.OPEN.value)
         result = await self._session.execute(stmt)

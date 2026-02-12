@@ -119,11 +119,16 @@ class TurtleSignalEngine:
 
         current_price = realtime_price if realtime_price is not None else closes[-1]
 
+        if realtime_price is not None:
+            highs = highs + [realtime_price]
+            lows = lows + [realtime_price]
+            closes = closes + [realtime_price]
+
         atr_result = self._atr_calc.calculate(highs, lows, closes)
         if not atr_result:
             return None
 
-        previous_s1_winner = self._previous_s1_results.get(stock_id, True)
+        previous_s1_winner = await self._load_previous_s1_winner(stock_id)
 
         breakout = self._breakout.check_entry(current_price, highs, previous_s1_winner)
 
@@ -387,6 +392,19 @@ class TurtleSignalEngine:
         fallback = {"symbol": str(stock_id), "name": ""}
         self._stock_cache[stock_id] = fallback
         return fallback
+
+    async def _load_previous_s1_winner(self, stock_id: int) -> bool:
+        if stock_id in self._previous_s1_results:
+            return self._previous_s1_results[stock_id]
+
+        last_s1 = await self._position_repo.get_last_closed_s1(stock_id)
+        if last_s1 is None:
+            was_winner = False
+        else:
+            was_winner = last_s1.pnl is not None and last_s1.pnl > 0
+
+        self._previous_s1_results[stock_id] = was_winner
+        return was_winner
 
     def update_s1_result(self, stock_id: int, was_winner: bool) -> None:
         self._previous_s1_results[stock_id] = was_winner
