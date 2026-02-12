@@ -56,6 +56,7 @@ class RiskConfig(BaseModel):
 
 class ScheduleConfig(BaseModel):
     class MarketSchedule(BaseModel):
+        premarket_time: str = "08:00"
         screening_time: str = "08:00"
         market_open: str = "09:00"
         market_close: str = "15:30"
@@ -63,7 +64,8 @@ class ScheduleConfig(BaseModel):
     krx: MarketSchedule = Field(default_factory=lambda: ScheduleConfig.MarketSchedule())
     us: MarketSchedule = Field(
         default_factory=lambda: ScheduleConfig.MarketSchedule(
-            screening_time="21:00",
+            premarket_time="22:30",
+            screening_time="22:30",
             market_open="23:30",
             market_close="06:00",
         )

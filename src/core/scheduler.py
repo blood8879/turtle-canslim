@@ -62,39 +62,45 @@ class TradingScheduler:
             del self._jobs[job_id]
             logger.info("job_removed", job_id=job_id)
 
-    def setup_data_update_schedule(
+    def setup_premarket_schedule(
         self,
-        data_update_func: Callable[..., Coroutine[Any, Any, Any]],
+        premarket_func: Callable[..., Coroutine[Any, Any, Any]],
+        market: str = "both",
     ) -> None:
-        self.add_job(
-            "krx_data_update",
-            data_update_func,
-            CronTrigger(
-                hour=7,
-                minute=30,
-                day_of_week="mon-fri",
-                timezone=KST,
-            ),
-            kwargs={"market": "krx"},
-        )
+        if market in ("krx", "both"):
+            schedule = self._settings.schedule.krx
+            hour, minute = map(int, schedule.premarket_time.split(":"))
+            self.add_job(
+                "krx_premarket",
+                premarket_func,
+                CronTrigger(
+                    hour=hour,
+                    minute=minute,
+                    day_of_week="mon-fri",
+                    timezone=KST,
+                ),
+                kwargs={"market": "krx"},
+            )
 
-        self.add_job(
-            "us_data_update",
-            data_update_func,
-            CronTrigger(
-                hour=20,
-                minute=0,
-                day_of_week="mon-fri",
-                timezone=KST,
-            ),
-            kwargs={"market": "us"},
-        )
+        if market in ("us", "both"):
+            schedule = self._settings.schedule.us
+            hour, minute = map(int, schedule.premarket_time.split(":"))
+            self.add_job(
+                "us_premarket",
+                premarket_func,
+                CronTrigger(
+                    hour=hour,
+                    minute=minute,
+                    day_of_week="mon-fri",
+                    timezone=KST,
+                ),
+                kwargs={"market": "us"},
+            )
 
-        logger.info("data_update_schedule_configured")
+        logger.info("premarket_schedule_configured", market=market)
 
     def setup_krx_schedule(
         self,
-        screening_func: Callable[..., Coroutine[Any, Any, Any]],
         trading_func: Callable[..., Coroutine[Any, Any, Any]],
         monitoring_func: Callable[..., Coroutine[Any, Any, Any]],
         daily_report_func: Callable[..., Coroutine[Any, Any, Any]],
@@ -102,18 +108,6 @@ class TradingScheduler:
     ) -> None:
         schedule = self._settings.schedule.krx
         interval = self._settings.turtle.signal_check_interval_minutes
-
-        screening_hour, screening_min = map(int, schedule.screening_time.split(":"))
-        self.add_job(
-            "krx_screening",
-            screening_func,
-            CronTrigger(
-                hour=screening_hour,
-                minute=screening_min,
-                day_of_week="mon-fri",
-                timezone=KST,
-            ),
-        )
 
         signal_func = realtime_trading_func or trading_func
         self.add_job(
@@ -159,26 +153,12 @@ class TradingScheduler:
 
     def setup_us_schedule(
         self,
-        screening_func: Callable[..., Coroutine[Any, Any, Any]],
         trading_func: Callable[..., Coroutine[Any, Any, Any]],
         monitoring_func: Callable[..., Coroutine[Any, Any, Any]],
         daily_report_func: Callable[..., Coroutine[Any, Any, Any]],
         realtime_trading_func: Callable[..., Coroutine[Any, Any, Any]] | None = None,
     ) -> None:
-        schedule = self._settings.schedule.us
         interval = self._settings.turtle.signal_check_interval_minutes
-
-        screening_hour, screening_min = map(int, schedule.screening_time.split(":"))
-        self.add_job(
-            "us_screening",
-            screening_func,
-            CronTrigger(
-                hour=screening_hour,
-                minute=screening_min,
-                day_of_week="mon-fri",
-                timezone=KST,
-            ),
-        )
 
         signal_func = realtime_trading_func or trading_func
         self.add_job(

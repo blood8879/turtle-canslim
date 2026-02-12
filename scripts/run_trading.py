@@ -138,7 +138,7 @@ class TradingBot:
 
         logger.info("data_update_complete", market=target)
 
-    async def run_screening(self) -> list[int]:
+    async def run_screening(self) -> list[str]:
         logger.info("running_screening", market=self._market)
 
         async with self._db.session() as session:
@@ -160,6 +160,55 @@ class TradingBot:
             logger.info("screening_complete", candidates=len(candidates))
 
             return [r.symbol for r in candidates]
+
+    async def run_premarket(self, market: str | None = None) -> None:
+        target = market or self._market
+        start = datetime.now()
+        logger.info("premarket_start", market=target)
+        tlog.info("premarket_data_update_start", market=target)
+
+        try:
+            await self.run_data_update(market=target)
+            tlog.info("premarket_data_update_done", market=target)
+        except Exception as e:
+            logger.error("premarket_data_update_failed", market=target, error=str(e))
+
+        try:
+            saved_market = self._market
+            self._market = target
+            candidates = await self.run_screening()
+            self._market = saved_market
+            tlog.info(
+                "premarket_screening_done",
+                market=target,
+                candidates=len(candidates),
+            )
+        except Exception as e:
+            logger.error("premarket_screening_failed", market=target, error=str(e))
+            candidates = []
+
+        elapsed = (datetime.now() - start).total_seconds()
+        tlog.info(
+            "premarket_complete",
+            market=target,
+            candidates=len(candidates),
+            elapsed_seconds=round(elapsed, 1),
+        )
+
+        if self._notifier.is_enabled:
+            market_label = "KRX" if target == "krx" else "US"
+            msg = (
+                f"📋 <b>{market_label} 장전 준비 완료</b>\n\n"
+                f"<b>재무 데이터:</b> 최신 업데이트 완료\n"
+                f"<b>CANSLIM 후보:</b> {len(candidates)}종목\n"
+                f"<b>소요 시간:</b> {elapsed:.0f}초"
+            )
+            if candidates:
+                symbols = ", ".join(candidates[:10])
+                msg += f"\n\n<b>후보 종목:</b> {symbols}"
+                if len(candidates) > 10:
+                    msg += f" 외 {len(candidates) - 10}개"
+            await self._notifier.send_message(msg)
 
     _US_MARKETS = {"NYSE", "NASDAQ", "US", "us"}
 
@@ -827,8 +876,7 @@ class TradingBot:
         await self.initialize()
 
         try:
-            await self.run_data_update()
-            await self.run_screening()
+            await self.run_premarket()
             await self.run_realtime_signal_check()
             await self.generate_daily_report()
         finally:
@@ -856,13 +904,13 @@ class TradingBot:
         try:
             await self._set_trading_state(active=True)
 
-            self._scheduler.setup_data_update_schedule(
-                data_update_func=self.run_data_update,
+            self._scheduler.setup_premarket_schedule(
+                premarket_func=self.run_premarket,
+                market=self._market,
             )
 
             if self._market in ["krx", "both"]:
                 self._scheduler.setup_krx_schedule(
-                    screening_func=self.run_screening,
                     trading_func=self.run_signal_check,
                     monitoring_func=self.run_monitoring,
                     daily_report_func=self.generate_daily_report,
@@ -871,7 +919,6 @@ class TradingBot:
 
             if self._market in ["us", "both"]:
                 self._scheduler.setup_us_schedule(
-                    screening_func=self.run_screening,
                     trading_func=self.run_signal_check,
                     monitoring_func=self.run_monitoring,
                     daily_report_func=self.generate_daily_report,

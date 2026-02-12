@@ -31,11 +31,13 @@ risk:
 
 schedule:
   krx:
+    premarket_time: "08:00"
     screening_time: "08:00"
     market_open: "09:00"
     market_close: "15:30"
   us:
-    screening_time: "21:00"
+    premarket_time: "22:30"
+    screening_time: "22:30"
     market_open: "23:30"
     market_close: "06:00"
 
