@@ -8,7 +8,10 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.signals.breakout import BreakoutProximityWatcher
 
 import unicodedata
 
@@ -222,6 +225,61 @@ class SignalsTable(Static):
             )
 
 
+class WatchlistTable(Static):
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="watchlist-status-panel")
+        yield DataTable(id="watchlist-table")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#watchlist-table", DataTable)
+        table.add_columns(
+            "종목코드", "종목명", "현재가", "S1 돌파가", "S1 거리", "S2 돌파가", "S2 거리", "ATR"
+        )
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+    def update_status(self, status_text: str) -> None:
+        panel = self.query_one("#watchlist-status-panel", Static)
+        panel.update(status_text)
+
+    def update_data(self, items: list[dict]) -> None:
+        table = self.query_one("#watchlist-table", DataTable)
+        table.clear()
+
+        for item in items:
+            s1_level = item.get("s1_level")
+            s2_level = item.get("s2_level")
+            s1_dist = item.get("s1_distance_pct")
+            s2_dist = item.get("s2_distance_pct")
+
+            s1_level_str = f"{s1_level:,.2f}" if s1_level is not None else "-"
+            s2_level_str = f"{s2_level:,.2f}" if s2_level is not None else "-"
+
+            if s1_dist is not None:
+                s1_color = "red" if s1_dist < 3 else ("yellow" if s1_dist < 5 else "green")
+                s1_dist_str = Text(f"{s1_dist:.1f}%", style=s1_color)
+            else:
+                s1_dist_str = Text("-", style="dim")
+
+            if s2_dist is not None:
+                s2_color = "red" if s2_dist < 3 else ("yellow" if s2_dist < 5 else "green")
+                s2_dist_str = Text(f"{s2_dist:.1f}%", style=s2_color)
+            else:
+                s2_dist_str = Text("-", style="dim")
+
+            table.add_row(
+                item.get("symbol", ""),
+                _truncate_wide(item.get("name", ""), 12),
+                f"{item.get('current_price', 0):,.2f}",
+                s1_level_str,
+                s1_dist_str,
+                s2_level_str,
+                s2_dist_str,
+                f"{item.get('atr', 0):,.2f}",
+            )
+
+
 class KeyboardShortcutsPanel(Static):
     """Keyboard shortcuts display panel."""
 
@@ -244,6 +302,7 @@ class KeyboardShortcutsPanel(Static):
 [bold yellow]N[/]    US 스크리닝
 [bold yellow]T[/]    KRX 트레이딩 시작/중지
 [bold yellow]Y[/]    US 트레이딩 시작/중지
+[bold yellow]W[/]    감시 목록 새로고침
 [bold yellow]H[/]    매매 내역 새로고침
 [bold yellow]M[/]    모의/실전 모드 전환
 [bold yellow]D[/]    다크/라이트 모드 전환
@@ -251,7 +310,7 @@ class KeyboardShortcutsPanel(Static):
 [bold cyan]═══ 탭 전환 ═══[/]
 
 [bold yellow]←/→[/]  이전/다음 탭 전환
-[bold yellow]1-7[/]  탭 직접 선택 (Portfolio/Candidates/Signals/매매내역/Log/Settings/Shortcuts)
+[bold yellow]1-8[/]  탭 직접 선택 (Portfolio/Candidates/Signals/감시목록/매매내역/Log/Settings/Shortcuts)
 
 [bold cyan]═══ 테이블 내 이동 ═══[/]
 
@@ -444,7 +503,7 @@ class TurtleCANSLIMApp(App):
     }
     """
 
-    _TAB_IDS = ["portfolio", "candidates", "signals", "trade-history", "log", "settings", "shortcuts"]
+    _TAB_IDS = ["portfolio", "candidates", "signals", "watchlist", "trade-history", "log", "settings", "shortcuts"]
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -455,6 +514,7 @@ class TurtleCANSLIMApp(App):
         Binding("n", "run_screening_us", "US"),
         Binding("t", "toggle_trading_krx", "KRX Trade"),
         Binding("y", "toggle_trading_us", "US Trade"),
+        Binding("w", "refresh_watchlist", "Watchlist"),
         Binding("h", "refresh_trade_history", "Trade History"),
         Binding("m", "toggle_trading_mode", "Mode"),
         Binding("d", "toggle_dark", "Dark/Light"),
@@ -463,10 +523,11 @@ class TurtleCANSLIMApp(App):
         Binding("1", "show_tab('portfolio')", "Portfolio", show=False),
         Binding("2", "show_tab('candidates')", "Candidates", show=False),
         Binding("3", "show_tab('signals')", "Signals", show=False),
-        Binding("4", "show_tab('trade-history')", "Trade History", show=False),
-        Binding("5", "show_tab('log')", "Log", show=False),
-        Binding("6", "show_tab('settings')", "Settings", show=False),
-        Binding("7", "show_tab('shortcuts')", "Shortcuts", show=False),
+        Binding("4", "show_tab('watchlist')", "Watchlist", show=False),
+        Binding("5", "show_tab('trade-history')", "Trade History", show=False),
+        Binding("6", "show_tab('log')", "Log", show=False),
+        Binding("7", "show_tab('settings')", "Settings", show=False),
+        Binding("8", "show_tab('shortcuts')", "Shortcuts", show=False),
     ]
 
     def __init__(self) -> None:
@@ -478,6 +539,9 @@ class TurtleCANSLIMApp(App):
         self._screening_progress = ScreeningProgress()
         self._trading_active_krx: bool = False
         self._trading_active_us: bool = False
+        self._watched_stocks: list[dict] = []
+        self._proximity_watcher_krx: BreakoutProximityWatcher | None = None
+        self._proximity_watcher_us: BreakoutProximityWatcher | None = None
         self._log_file = self._init_log_file()
 
     @staticmethod
@@ -502,6 +566,8 @@ class TurtleCANSLIMApp(App):
                     yield CandidatesTable()
                 with TabPane("Signals", id="signals"):
                     yield SignalsTable()
+                with TabPane("감시 목록", id="watchlist"):
+                    yield WatchlistTable(id="watchlist-tab")
                 with TabPane("매매 내역", id="trade-history"):
                     yield TradeHistoryTable(id="trade-history-tab")
                 with TabPane("Log", id="log"):
@@ -908,6 +974,76 @@ class TurtleCANSLIMApp(App):
         except Exception as e:
             self.log_message(f"[red]매매 내역 조회 오류: {e}[/]")
 
+    def action_refresh_watchlist(self) -> None:
+        self._update_watchlist_display()
+
+    def _update_watchlist_display(self) -> None:
+        items: list[dict] = []
+        for watcher, market_label in [
+            (self._proximity_watcher_krx, "KRX"),
+            (self._proximity_watcher_us, "US"),
+        ]:
+            if watcher is None:
+                continue
+            for watched in watcher.get_watched_list():
+                s1_level = None
+                s1_dist = None
+                s2_level = None
+                s2_dist = None
+                for target in watched.targets:
+                    if target.system == 1:
+                        s1_level = float(target.breakout_level)
+                        s1_dist = float(target.distance_pct) * 100
+                    elif target.system == 2:
+                        s2_level = float(target.breakout_level)
+                        s2_dist = float(target.distance_pct) * 100
+
+                current_price = float(watched.closes[-1]) if watched.closes else 0
+
+                items.append({
+                    "symbol": watched.symbol,
+                    "name": watched.name,
+                    "market": market_label,
+                    "current_price": current_price,
+                    "s1_level": s1_level,
+                    "s1_distance_pct": s1_dist,
+                    "s2_level": s2_level,
+                    "s2_distance_pct": s2_dist,
+                    "atr": float(watched.atr_n),
+                })
+
+        self._watched_stocks = items
+
+        total_count = len(items)
+        krx_count = sum(1 for i in items if i["market"] == "KRX")
+        us_count = sum(1 for i in items if i["market"] == "US")
+
+        if total_count > 0:
+            status_text = (
+                f"[bold cyan]──── 돌파 근접 감시 ────[/]\n"
+                f"[bold]감시 중:[/] {total_count}종목"
+            )
+            if krx_count > 0:
+                status_text += f"  [bold]KRX:[/] {krx_count}"
+            if us_count > 0:
+                status_text += f"  [bold]US:[/] {us_count}"
+            if self._trading_active_krx or self._trading_active_us:
+                status_text += f"  [green]● 트레이딩 활성[/]"
+            else:
+                status_text += f"  [dim]○ 트레이딩 비활성[/]"
+        else:
+            if self._trading_active_krx or self._trading_active_us:
+                status_text = "[dim]돌파 근접 종목 없음 — 다음 사이클에서 갱신됩니다[/]"
+            else:
+                status_text = "[dim]트레이딩을 시작하면 감시 목록이 표시됩니다 (T: KRX, Y: US)[/]"
+
+        try:
+            watchlist_table = self.query_one(WatchlistTable)
+            watchlist_table.update_status(status_text)
+            watchlist_table.update_data(items)
+        except Exception:
+            pass
+
     def action_run_screening_default(self) -> None:
         """전체 스크리닝 (설정된 마켓 기준)."""
         self._run_screening_for_market("both")
@@ -1116,6 +1252,10 @@ class TurtleCANSLIMApp(App):
             await broker.connect()
 
             proximity_watcher = BreakoutProximityWatcher(self._settings.turtle)
+            if target_market == "krx":
+                self._proximity_watcher_krx = proximity_watcher
+            else:
+                self._proximity_watcher_us = proximity_watcher
             fast_poll_seconds = self._settings.turtle.fast_poll_interval_seconds
             self.log_message(
                 f"[cyan]돌파 근접 감시: {self._settings.turtle.breakout_proximity_pct:.1%} 이내 → "
@@ -1329,6 +1469,7 @@ class TurtleCANSLIMApp(App):
 
                     await self._load_signals()
                     await self._load_portfolio()
+                    self._update_watchlist_display()
                     await self._update_heartbeat_db(target_market)
                     self._update_status()
 
@@ -1432,6 +1573,7 @@ class TurtleCANSLIMApp(App):
                         except Exception as e:
                             self.log_message(f"[red]Fast poll 오류: {e}[/]")
 
+                        self._update_watchlist_display()
                         await asyncio.sleep(fast_poll_seconds)
                         elapsed += fast_poll_seconds
                     else:
@@ -1451,8 +1593,11 @@ class TurtleCANSLIMApp(App):
             await self._set_trading_state_db(target_market, False)
             if is_krx:
                 self._trading_active_krx = False
+                self._proximity_watcher_krx = None
             else:
                 self._trading_active_us = False
+                self._proximity_watcher_us = None
+            self._update_watchlist_display()
             self.log_message(f"[green]{target_market.upper()} 트레이딩 종료[/]")
 
     def action_stop_trading_krx(self) -> None:
