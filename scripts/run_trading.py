@@ -50,14 +50,30 @@ class TradingBot:
         self._notifier = TelegramNotifier()
         self._scheduler = TradingScheduler()
 
-        if self._settings.trading_mode == TradingMode.LIVE:
-            self._broker = LiveBroker()
-        elif self._settings.has_kis_credentials:
-            self._broker = LiveBroker()
+        self._brokers: dict[str, LiveBroker | PaperBroker] = {}
+        if market == "both":
+            self._brokers["krx"] = self._create_broker("krx")
+            self._brokers["us"] = self._create_broker("us")
+            self._broker = self._brokers["krx"]
         else:
-            self._broker = PaperBroker(initial_cash=Decimal("100000000"))
+            self._broker = self._create_broker(market)
+            self._brokers[market] = self._broker
 
         self._proximity_watcher = BreakoutProximityWatcher(self._settings.turtle)
+
+    def _create_broker(self, market: str) -> LiveBroker | PaperBroker:
+        from src.execution.live_broker import MarketType
+        broker_market: MarketType = "us" if market == "us" else "krx"
+        if self._settings.trading_mode == TradingMode.LIVE:
+            return LiveBroker(market=broker_market)
+        elif self._settings.has_kis_credentials:
+            return LiveBroker(market=broker_market)
+        else:
+            return PaperBroker(initial_cash=Decimal("100000000"))
+
+    def _get_broker(self, market: str | None = None) -> LiveBroker | PaperBroker:
+        target = market or self._market
+        return self._brokers.get(target, self._broker)
 
     async def initialize(self) -> None:
         logger.info(
@@ -66,7 +82,8 @@ class TradingBot:
             market=self._market,
         )
 
-        await self._broker.connect()
+        for broker in self._brokers.values():
+            await broker.connect()
         await self._db.create_tables()
 
         balance = await self._broker.get_balance()
@@ -101,7 +118,8 @@ class TradingBot:
         logger.info("trading_bot_shutdown")
 
         self._scheduler.stop()
-        await self._broker.disconnect()
+        for broker in self._brokers.values():
+            await broker.disconnect()
         await self._db.close()
 
         if self._notifier.is_enabled:
@@ -140,6 +158,13 @@ class TradingBot:
 
             return [r.symbol for r in candidates]
 
+    _US_MARKETS = {"NYSE", "NASDAQ", "US", "us"}
+
+    def _broker_for_stock(self, stock_market: str) -> LiveBroker | PaperBroker:
+        if stock_market in self._US_MARKETS:
+            return self._brokers.get("us", self._broker)
+        return self._brokers.get("krx", self._broker)
+
     async def _fetch_realtime_prices(
         self,
         stock_ids: list[int],
@@ -154,7 +179,8 @@ class TradingBot:
                 stock = await stock_repo.get_by_id(stock_id)
                 if not stock:
                     continue
-                price = await self._broker.get_current_price(stock.symbol)
+                broker = self._broker_for_stock(stock.market)
+                price = await broker.get_current_price(stock.symbol)
                 if price and price > 0:
                     prices[stock_id] = price
             except Exception as e:
@@ -193,13 +219,16 @@ class TradingBot:
             position_sizer = PositionSizer(self._settings.risk)
             unit_manager = UnitLimitManager(self._settings.risk, position_repo)
 
-            order_manager = OrderManager(
-                broker=self._broker,
-                position_sizer=position_sizer,
-                unit_manager=unit_manager,
-                order_repo=order_repo,
-                position_repo=position_repo,
-            )
+            async def _make_order_manager(stock_id: int) -> OrderManager:
+                stock = await stock_repo.get_by_id(stock_id)
+                broker = self._broker_for_stock(stock.market) if stock else self._broker
+                return OrderManager(
+                    broker=broker,
+                    position_sizer=position_sizer,
+                    unit_manager=unit_manager,
+                    order_repo=order_repo,
+                    position_repo=position_repo,
+                )
 
             open_positions = await position_repo.get_open_positions()
             position_stock_ids = [p.stock_id for p in open_positions]
@@ -231,6 +260,7 @@ class TradingBot:
                     stop_loss=float(sig.stop_loss) if sig.stop_loss else None,
                     system=sig.system,
                 )
+                order_manager = await _make_order_manager(sig.stock_id)
                 result = await order_manager.execute_exit(sig)
                 tlog.info(
                     "exit_order_result",
@@ -278,6 +308,7 @@ class TradingBot:
                     breakout_level=float(sig.breakout_level) if sig.breakout_level else None,
                     atr_n=float(sig.atr_n),
                 )
+                order_manager = await _make_order_manager(sig.stock_id)
                 result = await order_manager.execute_pyramid(sig)
                 tlog.info(
                     "pyramid_order_result",
@@ -315,6 +346,7 @@ class TradingBot:
                     atr_n=float(sig.atr_n),
                     system=sig.system,
                 )
+                order_manager = await _make_order_manager(sig.stock_id)
                 result = await order_manager.execute_entry(sig)
                 tlog.info(
                     "entry_order_result",
@@ -440,16 +472,20 @@ class TradingBot:
             position_sizer = PositionSizer(self._settings.risk)
             unit_manager = UnitLimitManager(self._settings.risk, position_repo)
 
-            order_manager = OrderManager(
-                broker=self._broker,
-                position_sizer=position_sizer,
-                unit_manager=unit_manager,
-                order_repo=order_repo,
-                position_repo=position_repo,
-            )
+            async def _make_order_manager(stock_id: int) -> OrderManager:
+                stock = await stock_repo.get_by_id(stock_id)
+                broker = self._broker_for_stock(stock.market) if stock else self._broker
+                return OrderManager(
+                    broker=broker,
+                    position_sizer=position_sizer,
+                    unit_manager=unit_manager,
+                    order_repo=order_repo,
+                    position_repo=position_repo,
+                )
 
             exit_signals = await signal_engine.check_exit_signals()
             for sig in exit_signals:
+                order_manager = await _make_order_manager(sig.stock_id)
                 result = await order_manager.execute_exit(sig)
 
                 if self._notifier.is_enabled:
@@ -479,6 +515,7 @@ class TradingBot:
 
             pyramid_signals = await signal_engine.check_pyramid_signals()
             for sig in pyramid_signals:
+                order_manager = await _make_order_manager(sig.stock_id)
                 result = await order_manager.execute_pyramid(sig)
 
                 if self._notifier.is_enabled and result.success:
@@ -501,6 +538,7 @@ class TradingBot:
 
             entry_signals = await signal_engine.check_entry_signals(candidate_ids)
             for sig in entry_signals:
+                order_manager = await _make_order_manager(sig.stock_id)
                 result = await order_manager.execute_entry(sig)
 
                 if self._notifier.is_enabled:
@@ -558,19 +596,22 @@ class TradingBot:
                 order_repo = OrderRepository(session)
                 position_repo = PositionRepository(session)
                 signal_repo = SignalRepository(session)
+                stock_repo = StockRepository(session)
                 position_sizer = PositionSizer(self._settings.risk)
                 unit_manager = UnitLimitManager(self._settings.risk, position_repo)
-                order_manager = OrderManager(
-                    broker=self._broker,
-                    position_sizer=position_sizer,
-                    unit_manager=unit_manager,
-                    order_repo=order_repo,
-                    position_repo=position_repo,
-                )
 
                 for watched in self._proximity_watcher.get_watched_list():
                     try:
-                        price = await self._broker.get_current_price(watched.symbol)
+                        stock = await stock_repo.get_by_id(watched.stock_id)
+                        broker = self._broker_for_stock(stock.market) if stock else self._broker
+                        order_manager = OrderManager(
+                            broker=broker,
+                            position_sizer=position_sizer,
+                            unit_manager=unit_manager,
+                            order_repo=order_repo,
+                            position_repo=position_repo,
+                        )
+                        price = await broker.get_current_price(watched.symbol)
                         if price <= 0:
                             continue
 
@@ -659,34 +700,56 @@ class TradingBot:
 
         async with self._db.session() as session:
             position_repo = PositionRepository(session)
-            portfolio_mgr = PortfolioManager(
-                broker=self._broker,
-                position_repo=position_repo,
-            )
 
-            triggered = await portfolio_mgr.check_stop_losses()
-
-            for pos in triggered:
-                logger.warning(
-                    "stop_loss_alert",
-                    symbol=pos.symbol,
-                    current_price=float(pos.current_price),
-                    stop_loss=float(pos.stop_loss_price) if pos.stop_loss_price else 0,
+            for broker in self._brokers.values():
+                portfolio_mgr = PortfolioManager(
+                    broker=broker,
+                    position_repo=position_repo,
                 )
+
+                triggered = await portfolio_mgr.check_stop_losses()
+
+                for pos in triggered:
+                    logger.warning(
+                        "stop_loss_alert",
+                        symbol=pos.symbol,
+                        current_price=float(pos.current_price),
+                        stop_loss=float(pos.stop_loss_price) if pos.stop_loss_price else 0,
+                    )
 
     async def generate_daily_report(self) -> None:
         logger.info("generating_daily_report")
 
         async with self._db.session() as session:
             position_repo = PositionRepository(session)
-            portfolio_mgr = PortfolioManager(
-                broker=self._broker,
-                position_repo=position_repo,
+
+            total_value = Decimal("0")
+            total_pnl = Decimal("0")
+            total_positions = 0
+            total_units = 0
+
+            for market_key, broker in self._brokers.items():
+                portfolio_mgr = PortfolioManager(
+                    broker=broker,
+                    position_repo=position_repo,
+                )
+
+                summary = await portfolio_mgr.get_summary()
+
+                label = market_key.upper()
+                print(f"\n[{label}]")
+                print(portfolio_mgr.format_summary(summary))
+
+                total_value += summary.total_value
+                total_pnl += summary.total_unrealized_pnl
+                total_positions += summary.position_count
+                total_units += summary.total_units
+
+            total_pnl_pct = (
+                (total_pnl / (total_value - total_pnl))
+                if (total_value - total_pnl) > 0
+                else Decimal("0")
             )
-
-            summary = await portfolio_mgr.get_summary()
-
-            print("\n" + portfolio_mgr.format_summary(summary))
 
             if self._notifier.is_enabled:
                 from src.notification.telegram_bot import DailyReport
@@ -694,11 +757,11 @@ class TradingBot:
                 await self._notifier.send_daily_report(
                     DailyReport(
                         date=datetime.now().strftime("%Y-%m-%d"),
-                        total_value=summary.total_value,
-                        daily_pnl=summary.total_unrealized_pnl,
-                        daily_pnl_pct=summary.total_unrealized_pnl_pct,
-                        open_positions=summary.position_count,
-                        total_units=summary.total_units,
+                        total_value=total_value,
+                        daily_pnl=total_pnl,
+                        daily_pnl_pct=total_pnl_pct,
+                        open_positions=total_positions,
+                        total_units=total_units,
                         signals_generated=0,
                         orders_executed=0,
                     )
