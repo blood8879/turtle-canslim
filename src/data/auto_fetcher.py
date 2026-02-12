@@ -167,6 +167,45 @@ class AutoDataFetcher:
 
         return await self._ensure_single(market_lower, progress_callback)
 
+    async def ensure_financials(
+        self,
+        market: str,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> bool:
+        """재무제표 데이터만 업데이트 (가격/인덱스/메타데이터 제외).
+
+        이번 분기 데이터가 이미 있으면 스킵합니다.
+        """
+        market_lower = market.lower()
+        markets = ("krx", "us") if market_lower == "both" else (market_lower,)
+        updated = False
+
+        for mkt in markets:
+            fundamentals_stale = await self._is_fundamentals_stale(mkt)
+            if not fundamentals_stale:
+                logger.info(
+                    "financials_up_to_date",
+                    market=mkt,
+                    msg="이번 분기 재무제표 데이터가 최신 상태입니다.",
+                )
+                continue
+
+            if progress_callback:
+                progress_callback(
+                    f"재무제표 데이터가 오래되었습니다. 업데이트 중... ({mkt.upper()})"
+                )
+            logger.info("financials_stale_updating", market=mkt)
+
+            if mkt == "krx":
+                await self.fetch_krx_financials(progress_callback)
+            else:
+                await self.update_us_financials(progress_callback)
+            updated = True
+
+            logger.info("financials_update_complete", market=mkt)
+
+        return updated
+
     async def _db_stock_count(self, market: str) -> int:
         markets = self._market_values(market)
         stmt = (

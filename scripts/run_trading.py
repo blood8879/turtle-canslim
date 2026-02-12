@@ -138,6 +138,16 @@ class TradingBot:
 
         logger.info("data_update_complete", market=target)
 
+    async def run_financial_update(self, market: str | None = None) -> None:
+        target = market or self._market
+        logger.info("running_financial_update", market=target)
+
+        async with self._db.session() as session:
+            fetcher = AutoDataFetcher(session)
+            updated = await fetcher.ensure_financials(target)
+
+        logger.info("financial_update_complete", market=target, updated=updated)
+
     async def run_screening(self) -> list[str]:
         logger.info("running_screening", market=self._market)
 
@@ -168,10 +178,10 @@ class TradingBot:
         tlog.info("premarket_data_update_start", market=target)
 
         try:
-            await self.run_data_update(market=target)
-            tlog.info("premarket_data_update_done", market=target)
+            await self.run_financial_update(market=target)
+            tlog.info("premarket_financial_update_done", market=target)
         except Exception as e:
-            logger.error("premarket_data_update_failed", market=target, error=str(e))
+            logger.error("premarket_financial_update_failed", market=target, error=str(e))
 
         try:
             saved_market = self._market
