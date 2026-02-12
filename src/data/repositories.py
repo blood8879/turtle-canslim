@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Sequence
 
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -356,6 +356,32 @@ class CANSLIMScoreRepository:
                 )
         result = await self._session.execute(stmt)
         return result.scalars().all()
+
+    async def invalidate_candidates(self, market: str | None = None) -> int:
+        if market:
+            market_lower = market.lower()
+            markets = self._MARKET_GROUPS.get(market_lower, [market_lower])
+            stmt = (
+                update(CANSLIMScore)
+                .where(
+                    and_(
+                        CANSLIMScore.is_candidate == True,
+                        CANSLIMScore.stock_id.in_(
+                            select(Stock.id).where(Stock.market.in_(markets))
+                        ),
+                    )
+                )
+                .values(is_candidate=False)
+            )
+        else:
+            stmt = (
+                update(CANSLIMScore)
+                .where(CANSLIMScore.is_candidate == True)
+                .values(is_candidate=False)
+            )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return result.rowcount
 
     async def create(self, stock_id: int, date: datetime, **scores: bool | int | Decimal | None) -> CANSLIMScore:
         score = CANSLIMScore(stock_id=stock_id, date=date, **scores)

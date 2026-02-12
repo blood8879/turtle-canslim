@@ -110,6 +110,10 @@ class USCANSLIMScreener:
     async def screen(self, symbols: list[str] | None = None) -> list[CANSLIMScoreResult]:
         logger.info("us_canslim_screen_start", symbol_count=len(symbols) if symbols else "all")
 
+        invalidated = await self._score_repo.invalidate_candidates("us")
+        if invalidated:
+            logger.info("us_canslim_invalidated_old_candidates", count=invalidated)
+
         await self._evaluate_market_condition()
 
         if symbols is None:

@@ -56,6 +56,10 @@ class CANSLIMScreener:
     async def screen(self, market: str = "krx") -> list[CANSLIMScoreResult]:
         logger.info("canslim_screen_start", market=market)
 
+        invalidated = await self._score_repo.invalidate_candidates(market)
+        if invalidated:
+            logger.info("canslim_invalidated_old_candidates", count=invalidated, market=market)
+
         await self._evaluate_market_condition(market)
 
         stocks = await self._stock_repo.get_all_active(market)
